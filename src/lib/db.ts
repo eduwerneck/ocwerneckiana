@@ -1036,6 +1036,46 @@ export function seedDatabaseIfEmpty() {
     "Convidamos a comunidade a consultar o repositório de anais do IX CITECA 2025, com 82 trabalhos completos acompanhados de metadados Dublin Core e arquivos PDF para livre consulta."
   );
 
+  // Inserir Certificados Iniciais
+  try {
+    const certCount = db.prepare("SELECT COUNT(*) as count FROM certificates").get() as { count: number };
+    if (!certCount || certCount.count === 0) {
+      db.prepare(`
+        INSERT INTO certificates (certificate_code, user_id, paper_id, sched_conf_id, type, title, recipient_name, recipient_email, description, verification_url)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        "OCW-2026-PRES-CITECA-8F2A9C",
+        6,
+        1,
+        1,
+        "presentation",
+        "Declaração de Apresentação de Trabalho",
+        "Dr. Lucas Martins de Oliveira",
+        "autor@unesp.br",
+        "Certificamos que Dr. Lucas Martins de Oliveira apresentou o trabalho intitulado 'Interoperabilidade em Repositórios Digitais: Uma Arquitetura Aberta para o Ecossistema PKP' na sessão técnica do X Congresso Internacional de Tecnologias Educacionais e Ciência Aberta (X CITECA 2026), realizado em São Paulo, SP.",
+        "/certificate/OCW-2026-PRES-CITECA-8F2A9C"
+      );
+
+      db.prepare(`
+        INSERT INTO certificates (certificate_code, user_id, paper_id, sched_conf_id, type, title, recipient_name, recipient_email, description, verification_url)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        "OCW-2026-REV-CITECA-4E7B12",
+        4,
+        1,
+        1,
+        "reviewer",
+        "Declaração de Atuação como Parecerista Ad-hoc",
+        "Profa. Dra. Beatriz Meireles",
+        "parecerista1@ufba.br",
+        "Certificamos que Profa. Dra. Beatriz Meireles atuou como parecerista ad-hoc no X Congresso Internacional de Tecnologias Educacionais e Ciência Aberta (X CITECA 2026), tendo avaliado o trabalho submetido à Trilha 1: Ciência Aberta, FAIR Principles e Repositórios Institucionais pelo método de avaliação por pares cega (double-blind review).",
+        "/certificate/OCW-2026-REV-CITECA-4E7B12"
+      );
+    }
+  } catch (err) {
+    console.error("Aviso ao semear certificados:", err);
+  }
+
     console.log("Banco de dados PKP OCS inicializado com sucesso!");
   } catch (e) {
     // Ignorar concorrência de seeding

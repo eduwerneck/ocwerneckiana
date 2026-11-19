@@ -322,23 +322,11 @@ DOI: ${paper.doi ? `https://doi.org/${paper.doi}` : "Em processo de indexação 
           </div>
         </div>
 
-        {/* Botão de Download Principal & Impressão / PDF */}
+        {/* Informação de Acesso Aberto (impressão unificada no cabeçalho) */}
         <div className="bg-purple-50/70 border border-purple-200 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div className="space-y-0.5 text-xs">
             <strong className="text-purple-950 font-bold block">{t("fullTextOpenAccess")}</strong>
             <span className="text-purple-700">Artigo Curto nos Anais • Avaliado por pares duplo-cego (Double-Blind Pure Web)</span>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={() => window.print()}
-              className="bg-white hover:bg-slate-100 text-slate-800 border border-slate-300 font-bold px-4 py-2 rounded-lg text-xs flex items-center space-x-2 transition shadow-2xs cursor-pointer print:hidden"
-              title="Imprimir versão diagramada limpa do artigo"
-            >
-              <Printer className="w-3.5 h-3.5 text-purple-600" />
-              <span>Imprimir Artigo</span>
-            </button>
           </div>
         </div>
 

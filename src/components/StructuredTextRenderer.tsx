@@ -43,12 +43,10 @@ export default function StructuredTextRenderer({
           const figNum = Number(match[1]);
           const inlineCaption = match[2]?.trim();
 
-          // Buscar a figura correspondente por ID ou menção no título
+          // Buscar a figura correspondente por ID exato ou fronteira numérica (evita "Figura 1" casar com "Figura 10")
+          const figBoundaryRe = new RegExp(`\\b(?:figura|figure)\\s+${figNum}\\b`, "i");
           const matchedFig = figures.find(
-            (f) =>
-              f.id === figNum ||
-              f.caption?.toLowerCase().includes(`figura ${figNum}`) ||
-              f.caption?.toLowerCase().includes(`figura ${figNum}:`)
+            (f) => f.id === figNum || (f.caption ? figBoundaryRe.test(f.caption) : false)
           );
 
           if (matchedFig) {

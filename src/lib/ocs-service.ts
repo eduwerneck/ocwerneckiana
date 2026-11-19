@@ -1,4 +1,6 @@
-import db, { seedDatabaseIfEmpty } from "./db";
+import db, { runInTransaction } from "./db.ts";
+import { escapeCsvCell, getAppBaseUrl } from "./security.ts";
+import { revokeUserSessions } from "./auth-core.ts";
 import { 
   sendRevisionRequiredEmail, 
   sendReviewerAssignedEmail, 
@@ -7,22 +9,21 @@ import {
   getEmailLogs,
   getCertificatesForUser,
   getCertificateByCode,
-  getSmtpSettings,
+  getPublicSmtpSettings,
   type AcademicCertificate,
-  type EmailLog
-} from "./email-service";
+  type EmailLog,
+  type PublicSmtpSettings
+} from "./email-service.ts";
 
 export { 
   getEmailLogs, 
   getCertificatesForUser, 
   getCertificateByCode, 
-  getSmtpSettings,
+  getPublicSmtpSettings,
   type AcademicCertificate, 
-  type EmailLog 
+  type EmailLog,
+  type PublicSmtpSettings
 };
-
-// Garantir banco populado
-seedDatabaseIfEmpty();
 
 export interface Conference {
   id: number;
@@ -302,7 +303,7 @@ export interface ProceedingsVolume {
 export function getProceedingsVolumes(): ProceedingsVolume[] {
   const rows = db.prepare(`
     SELECT sc.*, c.id as conference_id, c.title as conference_title, c.slug as conf_slug,
-           (SELECT COUNT(*) FROM papers p WHERE p.sched_conf_id = sc.id AND p.status = 'published') as published_papers_count
+           (SELECT COUNT(*) FROM papers p WHERE p.sched_conf_id = sc.id AND p.status = 'published' AND p.is_presented = 1) as published_papers_count
     FROM sched_confs sc
     JOIN conferences c ON c.id = sc.conference_id
     ORDER BY sc.start_date DESC
@@ -334,7 +335,7 @@ export function getProceedingsVolumes(): ProceedingsVolume[] {
 export function getSchedConfById(id: number): (SchedConf & { conference_title?: string; conf_slug?: string; tracks?: Track[]; published_count?: number }) | null {
   const sched = db.prepare(`
     SELECT sc.*, c.title as conference_title, c.slug as conf_slug,
-           (SELECT COUNT(*) FROM papers p WHERE p.sched_conf_id = sc.id AND p.status = 'published') as published_count
+           (SELECT COUNT(*) FROM papers p WHERE p.sched_conf_id = sc.id AND p.status = 'published' AND p.is_presented = 1) as published_count
     FROM sched_confs sc
     JOIN conferences c ON c.id = sc.conference_id
     WHERE sc.id = ?
@@ -344,6 +345,32 @@ export function getSchedConfById(id: number): (SchedConf & { conference_title?: 
 
   const tracks = db.prepare("SELECT * FROM tracks WHERE sched_conf_id = ? AND is_active = 1").all(id) as unknown as Track[];
   return toPlain({ ...sched, tracks });
+}
+
+/**
+ * Resolve deterministicamente a edição ativa:
+ * 1) Se `schedConfId` for informado e existir, retorna essa edição.
+ * 2) Caso contrário, retorna a primeira edição com `is_active = 1` ordenada por `start_date DESC, id ASC`.
+ * 3) Fallback para a edição mais recente cadastrada.
+ */
+export function getActiveSchedConf(schedConfId?: number): (SchedConf & { conference_title?: string; conf_slug?: string; tracks?: Track[]; published_count?: number }) | null {
+  if (schedConfId) {
+    const byId = getSchedConfById(schedConfId);
+    if (byId) return byId;
+  }
+  const activeRow = db.prepare(`
+    SELECT id FROM sched_confs
+    WHERE is_active = 1
+    ORDER BY start_date DESC, id ASC
+    LIMIT 1
+  `).get() as { id: number } | undefined;
+
+  if (activeRow) {
+    return getSchedConfById(activeRow.id);
+  }
+
+  const latestRow = db.prepare("SELECT id FROM sched_confs ORDER BY start_date DESC, id ASC LIMIT 1").get() as { id: number } | undefined;
+  return latestRow ? getSchedConfById(latestRow.id) : null;
 }
 
 export function getTracks(schedConfId: number): Track[] {
@@ -432,6 +459,96 @@ export function getPaperById(paperIdOrDoi: number | string): Paper | null {
   return toPlain(paper);
 }
 
+export type PaperActorRole = "public" | "author" | "reviewer" | "director";
+
+/**
+ * Fronteira única de projeção por ator (allow-list) para garantir sigilo duplo-cego no servidor.
+ */
+export function projectPaperForActor(paper: Paper | null, actorRole: PaperActorRole): Paper | null {
+  if (!paper) return null;
+
+  if (actorRole === "director") {
+    return toPlain(paper);
+  }
+
+  if (actorRole === "public") {
+    if (paper.status !== "published" || paper.is_presented !== 1) {
+      return null;
+    }
+    const {
+      reviews: _reviews,
+      decision: _decision,
+      comments_to_director: _ctd,
+      author_email: _ae,
+      author_response: _ar,
+      revised_file_name: _rfn,
+      ...publicFields
+    } = paper;
+    return toPlain({
+      ...publicFields,
+      authors: (paper.authors || []).map(({ email: _email, ...a }) => ({ ...a, email: "" })),
+    });
+  }
+
+  if (actorRole === "author") {
+    const sanitizedReviews = (paper.reviews || []).map((r) => ({
+      ...r,
+      reviewer_id: 0,
+      reviewer_name: undefined,
+      reviewer_affiliation: undefined,
+      comments_director: undefined,
+    }));
+    return toPlain({
+      ...paper,
+      reviews: sanitizedReviews,
+    });
+  }
+
+  // actorRole === "reviewer" (sigilo de autoria — duplo-cego)
+  const {
+    authors: _authors,
+    author_name: _an,
+    author_email: _ae,
+    comments_to_director: _ctd,
+    ...blindPaper
+  } = paper;
+  return toPlain({
+    ...blindPaper,
+    user_id: 0,
+    authors: [],
+  });
+}
+
+export function getPaperForPublic(paperIdOrDoi: number | string): Paper | null {
+  return projectPaperForActor(getPaperById(paperIdOrDoi), "public");
+}
+
+export function getPaperForAuthor(paperId: number, authorUserId: number): Paper | null {
+  const paper = getPaperById(paperId);
+  if (!paper || paper.user_id !== authorUserId) return null;
+  return projectPaperForActor(paper, "author");
+}
+
+export function getPaperForReviewer(paperId: number, reviewerUserId: number): Paper | null {
+  const assigned = db.prepare("SELECT id FROM review_assignments WHERE paper_id = ? AND reviewer_id = ? LIMIT 1").get(paperId, reviewerUserId);
+  if (!assigned) return null;
+  return projectPaperForActor(getPaperById(paperId), "reviewer");
+}
+
+export function getPaperForDirector(paperIdOrDoi: number | string): Paper | null {
+  return projectPaperForActor(getPaperById(paperIdOrDoi), "director");
+}
+
+export function getPaperOwnerId(paperId: number): number | null {
+  const row = db.prepare("SELECT user_id FROM papers WHERE id = ?").get(paperId) as { user_id: number } | undefined;
+  return row ? row.user_id : null;
+}
+
+export function getReviewAssignmentOwner(assignmentId: number): { reviewer_id: number; paper_id: number; status: string; round: number } | null {
+  const row = db.prepare("SELECT reviewer_id, paper_id, status, COALESCE(round, 1) as round FROM review_assignments WHERE id = ?").get(assignmentId) as { reviewer_id: number; paper_id: number; status: string; round: number } | undefined;
+  return row || null;
+}
+
 export function getSubmissionsForAuthor(userId: number): Paper[] {
   const papers = db.prepare(`
     SELECT p.*, t.title as track_title, t.abbreviation as track_abbreviation, 
@@ -449,11 +566,14 @@ export function getSubmissionsForAuthor(userId: number): Paper[] {
   for (const p of papers) {
     p.authors = db.prepare("SELECT * FROM paper_authors WHERE paper_id = ? ORDER BY seq ASC").all(p.id) as unknown as PaperAuthor[];
     p.decision = db.prepare("SELECT * FROM edit_decisions WHERE paper_id = ? ORDER BY date_decided DESC LIMIT 1").get(p.id) as unknown as EditDecision | undefined;
+    // Sigilo duplo-cego: nunca selecionar reviewer_name, reviewer_affiliation ou comments_director para o autor
     p.reviews = db.prepare(`
-      SELECT r.*, u.full_name as reviewer_name, u.affiliation as reviewer_affiliation 
-      FROM review_assignments r 
-      JOIN users u ON u.id = r.reviewer_id 
-      WHERE r.paper_id = ? 
+      SELECT r.id, r.paper_id, 0 as reviewer_id, r.status, r.recommendation, r.round,
+             r.author_response, r.revised_file_name,
+             r.score_originality, r.score_methodology, r.score_clarity, r.score_relevance,
+             r.comments_author, r.date_assigned, r.date_completed
+      FROM review_assignments r
+      WHERE r.paper_id = ?
       ORDER BY r.round ASC, r.id ASC
     `).all(p.id) as unknown as ReviewAssignment[];
   }
@@ -534,7 +654,7 @@ export function getPublishedProceedings(schedConfId?: number, search?: string, t
     JOIN tracks t ON t.id = p.track_id
     JOIN sched_confs sc ON sc.id = p.sched_conf_id
     JOIN conferences c ON c.id = sc.conference_id
-    WHERE p.status = 'published' AND (p.is_presented = 1 OR p.is_presented IS NULL)
+    WHERE p.status = 'published' AND p.is_presented = 1
   `;
   const params: unknown[] = [];
 
@@ -623,80 +743,114 @@ export function createPaper(data: {
     is_primary?: boolean;
   }>;
 }): number {
-  const stmt = db.prepare(`
-    INSERT INTO papers (sched_conf_id, track_id, user_id, title, abstract, keywords, presentation_type, status, funding, doi, file_name, file_size, comments_to_director, references_text, references_style, section_intro, section_methods, section_results, section_conclusion, figures_json, page_start, page_end)
-    VALUES (?, ?, ?, ?, ?, ?, ?, 'submitted', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `);
+  return runInTransaction(() => {
+    const stmt = db.prepare(`
+      INSERT INTO papers (sched_conf_id, track_id, user_id, title, abstract, keywords, presentation_type, status, funding, doi, file_name, file_size, comments_to_director, references_text, references_style, section_intro, section_methods, section_results, section_conclusion, figures_json, page_start, page_end)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 'submitted', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
 
-  const result = stmt.run(
-    data.sched_conf_id,
-    data.track_id,
-    data.user_id,
-    data.title,
-    data.abstract,
-    data.keywords,
-    data.presentation_type,
-    data.funding || "",
-    data.doi || null,
-    data.file_name || "artigo_manuscrito.pdf",
-    data.file_size || 450000,
-    data.comments_to_director || "",
-    data.references_text || "",
-    data.references_style || "abnt",
-    data.section_intro || "",
-    data.section_methods || "",
-    data.section_results || "",
-    data.section_conclusion || "",
-    data.figures_json || "[]",
-    data.page_start || 1,
-    data.page_end || 5
-  );
-
-  const paperId = Number(result.lastInsertRowid);
-
-  const authorStmt = db.prepare(`
-    INSERT INTO paper_authors (paper_id, full_name, email, affiliation, orcid, ror_id, credit_roles, is_primary, seq)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `);
-
-  data.authors.forEach((author, index) => {
-    authorStmt.run(
-      paperId,
-      author.full_name,
-      author.email,
-      author.affiliation,
-      author.orcid || "",
-      author.ror_id || "",
-      author.credit_roles || "",
-      author.is_primary ? 1 : index === 0 ? 1 : 0,
-      index + 1
+    const result = stmt.run(
+      data.sched_conf_id,
+      data.track_id,
+      data.user_id,
+      data.title,
+      data.abstract,
+      data.keywords,
+      data.presentation_type,
+      data.funding || "",
+      data.doi || null,
+      data.file_name || "artigo_manuscrito.pdf",
+      data.file_size || 450000,
+      data.comments_to_director || "",
+      data.references_text || "",
+      data.references_style || "abnt",
+      data.section_intro || "",
+      data.section_methods || "",
+      data.section_results || "",
+      data.section_conclusion || "",
+      data.figures_json || "[]",
+      data.page_start || 1,
+      data.page_end || 5
     );
-  });
 
-  return paperId;
+    const paperId = Number(result.lastInsertRowid);
+
+    const authorStmt = db.prepare(`
+      INSERT INTO paper_authors (paper_id, full_name, email, affiliation, orcid, ror_id, credit_roles, is_primary, seq)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    data.authors.forEach((author, index) => {
+      authorStmt.run(
+        paperId,
+        author.full_name,
+        author.email,
+        author.affiliation,
+        author.orcid || "",
+        author.ror_id || "",
+        author.credit_roles || "",
+        author.is_primary ? 1 : index === 0 ? 1 : 0,
+        index + 1
+      );
+    });
+
+    return paperId;
+  });
 }
 
 export function assignReviewer(paperId: number, reviewerId: number): number {
-  const existing = db.prepare("SELECT id FROM review_assignments WHERE paper_id = ? AND reviewer_id = ?").get(paperId, reviewerId);
-  if (existing) {
-    return (existing as { id: number }).id;
+  const { assignmentId, isNew } = runInTransaction(() => {
+    const paper = db.prepare("SELECT id, user_id, status, COALESCE(current_round, 1) as current_round FROM papers WHERE id = ?").get(paperId) as
+      | { id: number; user_id: number; status: string; current_round: number }
+      | undefined;
+    if (!paper) {
+      throw new Error("Trabalho não encontrado.");
+    }
+
+    const reviewer = db.prepare("SELECT id, email, full_name FROM users WHERE id = ?").get(reviewerId) as
+      | { id: number; email: string; full_name: string }
+      | undefined;
+    if (!reviewer) {
+      throw new Error("Avaliador não encontrado.");
+    }
+
+    // Bloqueio de conflito de interesse (autor ou coautor do manuscrito)
+    const authors = db.prepare("SELECT email, full_name FROM paper_authors WHERE paper_id = ?").all(paperId) as Array<{ email: string; full_name: string }>;
+    const revEmail = (reviewer.email || "").toLowerCase();
+    const revName = (reviewer.full_name || "").toLowerCase();
+    const hasConflict =
+      paper.user_id === reviewer.id ||
+      authors.some((a) => (a.email || "").toLowerCase() === revEmail || (a.full_name || "").toLowerCase() === revName);
+
+    if (hasConflict) {
+      throw new Error("Conflito de interesse: o avaliador é autor ou coautor deste trabalho.");
+    }
+
+    const round = paper.current_round || 1;
+    const existing = db.prepare(
+      "SELECT id FROM review_assignments WHERE paper_id = ? AND reviewer_id = ? AND COALESCE(round, 1) = ?"
+    ).get(paperId, reviewerId, round) as { id: number } | undefined;
+
+    if (existing) {
+      return { assignmentId: existing.id, isNew: false };
+    }
+
+    const res = db.prepare(`
+      INSERT INTO review_assignments (paper_id, reviewer_id, status, round)
+      VALUES (?, ?, 'pending', ?)
+    `).run(paperId, reviewerId, round);
+
+    db.prepare("UPDATE papers SET status = 'under_review' WHERE id = ? AND status = 'submitted'").run(paperId);
+    return { assignmentId: Number(res.lastInsertRowid), isNew: true };
+  });
+
+  if (isNew) {
+    sendReviewerAssignedEmail(paperId, reviewerId).catch((e) =>
+      console.error("Erro ao enviar email para avaliador:", e)
+    );
   }
 
-  const stmt = db.prepare(`
-    INSERT INTO review_assignments (paper_id, reviewer_id, status)
-    VALUES (?, ?, 'pending')
-  `);
-  const res = stmt.run(paperId, reviewerId);
-
-  // Atualizar status do artigo para under_review se estivesse submitted
-  db.prepare("UPDATE papers SET status = 'under_review' WHERE id = ? AND status = 'submitted'").run(paperId);
-
-  // Disparar e-mail de notificação para o avaliador
-  try {
-    sendReviewerAssignedEmail(paperId, reviewerId).catch((e) => console.error("Erro ao enviar email para avaliador:", e));
-  } catch {}
-
-  return Number(res.lastInsertRowid);
+  return assignmentId;
 }
 
 export function submitReview(data: {
@@ -709,81 +863,111 @@ export function submitReview(data: {
   comments_author: string;
   comments_director: string;
 }) {
-  const stmt = db.prepare(`
-    UPDATE review_assignments 
-    SET status = 'completed',
-        recommendation = ?,
-        score_originality = ?,
-        score_methodology = ?,
-        score_clarity = ?,
-        score_relevance = ?,
-        comments_author = ?,
-        comments_director = ?,
-        date_completed = CURRENT_TIMESTAMP
-    WHERE id = ?
-  `);
+  // Regra determinística: submitReview registra o parecer sem sobrescrever papers.status diretamente
+  // (a transição editorial pertence exclusivamente a recordEditorialDecision).
+  runInTransaction(() => {
+    const existing = db.prepare(`
+      SELECT r.id, r.status, COALESCE(r.round, 1) as round, p.status as paper_status, COALESCE(p.current_round, 1) as current_round
+      FROM review_assignments r
+      JOIN papers p ON p.id = r.paper_id
+      WHERE r.id = ?
+    `).get(data.assignment_id) as { id: number; status: string; round: number; paper_status: string; current_round: number } | undefined;
 
-  stmt.run(
-    data.recommendation,
-    data.score_originality,
-    data.score_methodology,
-    data.score_clarity,
-    data.score_relevance,
-    data.comments_author,
-    data.comments_director,
-    data.assignment_id
-  );
-
-  // Emitir e enviar declaração de parecerista ad-hoc por e-mail
-  try {
-    sendReviewerCertificateEmail(data.assignment_id).catch((e) => console.error("Erro ao enviar declaração de parecerista:", e));
-  } catch {}
-
-  // Atualizar status do artigo se a recomendação for de revisão
-  const assignment = db.prepare("SELECT paper_id FROM review_assignments WHERE id = ?").get(data.assignment_id) as { paper_id: number } | undefined;
-  if (assignment) {
-    if (data.recommendation === "revisions") {
-      db.prepare("UPDATE papers SET status = 'revisions_required' WHERE id = ?").run(assignment.paper_id);
+    if (!existing) {
+      throw new Error("Atribuição de parecer não encontrada.");
     }
-  }
+    if (existing.status === "completed") {
+      throw new Error("Este parecer já foi concluído.");
+    }
+    if (existing.round < existing.current_round) {
+      throw new Error("Não é permitido enviar parecer para uma rodada anterior.");
+    }
+    if (["accepted", "published", "rejected"].includes(existing.paper_status)) {
+      throw new Error("O trabalho já possui decisão editorial finalizada.");
+    }
+
+    db.prepare(`
+      UPDATE review_assignments 
+      SET status = 'completed',
+          recommendation = ?,
+          score_originality = ?,
+          score_methodology = ?,
+          score_clarity = ?,
+          score_relevance = ?,
+          comments_author = ?,
+          comments_director = ?,
+          date_completed = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(
+      data.recommendation,
+      data.score_originality,
+      data.score_methodology,
+      data.score_clarity,
+      data.score_relevance,
+      data.comments_author,
+      data.comments_director,
+      data.assignment_id
+    );
+  });
+
+  // Emissão de declaração de parecerista somente após COMMIT
+  sendReviewerCertificateEmail(data.assignment_id).catch((e) =>
+    console.error("Erro ao enviar declaração de parecerista:", e)
+  );
 }
 
 export function submitAuthorRevision(data: {
   paper_id: number;
   revised_file_name: string;
   author_response: string;
-}) {
-  // 1. Atualizar o paper: status volta para 'under_review', salva arquivo corrigido e carta de resposta
-  db.prepare(`
-    UPDATE papers 
-    SET status = 'under_review',
-        revised_file_name = ?,
-        author_response = ?,
-        current_round = 2
-    WHERE id = ?
-  `).run(data.revised_file_name, data.author_response, data.paper_id);
+}): { nextRound: number } {
+  return runInTransaction(() => {
+    const paper = db.prepare("SELECT id, status, COALESCE(current_round, 1) as current_round FROM papers WHERE id = ?").get(data.paper_id) as
+      | { id: number; status: string; current_round: number }
+      | undefined;
 
-  // 2. Identificar os avaliadores originais que avaliaram o manuscrito
-  const prevAssignments = db.prepare(`
-    SELECT DISTINCT reviewer_id 
-    FROM review_assignments 
-    WHERE paper_id = ?
-  `).all(data.paper_id) as Array<{ reviewer_id: number }>;
-
-  // 3. Garantir que o trabalho volte para o MESMO avaliador na Rodada 2
-  for (const prev of prevAssignments) {
-    const existing = db.prepare(`
-      SELECT id FROM review_assignments 
-      WHERE paper_id = ? AND reviewer_id = ? AND round = 2
-    `).get(data.paper_id, prev.reviewer_id);
-
-    if (!existing) {
-      db.prepare(`
-        INSERT INTO review_assignments (paper_id, reviewer_id, status, round, author_response, revised_file_name, date_assigned)
-        VALUES (?, ?, 'pending', 2, ?, ?, CURRENT_TIMESTAMP)
-      `).run(data.paper_id, prev.reviewer_id, data.author_response, data.revised_file_name);
+    if (!paper) {
+      throw new Error("Trabalho não encontrado.");
     }
-  }
+    if (paper.status !== "revisions_required") {
+      throw new Error("O trabalho não está no estado de revisões requeridas.");
+    }
+
+    const prevRound = paper.current_round || 1;
+    const nextRound = prevRound + 1;
+
+    db.prepare(`
+      UPDATE papers 
+      SET status = 'under_review',
+          revised_file_name = ?,
+          author_response = ?,
+          current_round = ?
+      WHERE id = ?
+    `).run(data.revised_file_name, data.author_response, nextRound, data.paper_id);
+
+    // Reatribuir apenas pareceristas que concluíram a rodada anterior
+    const prevAssignments = db.prepare(`
+      SELECT DISTINCT reviewer_id 
+      FROM review_assignments 
+      WHERE paper_id = ? AND status = 'completed' AND COALESCE(round, 1) = ?
+    `).all(data.paper_id, prevRound) as Array<{ reviewer_id: number }>;
+
+    for (const prev of prevAssignments) {
+      const existing = db.prepare(`
+        SELECT id FROM review_assignments 
+        WHERE paper_id = ? AND reviewer_id = ? AND COALESCE(round, 1) = ?
+      `).get(data.paper_id, prev.reviewer_id, nextRound);
+
+      if (!existing) {
+        db.prepare(`
+          INSERT INTO review_assignments (paper_id, reviewer_id, status, round, author_response, revised_file_name, date_assigned)
+          VALUES (?, ?, 'pending', ?, ?, ?, CURRENT_TIMESTAMP)
+        `).run(data.paper_id, prev.reviewer_id, nextRound, data.author_response, data.revised_file_name);
+      }
+    }
+
+    return { nextRound };
+  });
 }
 
 export function markPaperPresented(paperId: number, isPresented: boolean, presentedBy: string = "Editor Responsável"): void {
@@ -959,51 +1143,43 @@ export function recordEditorialDecision(data: {
   publish_proceedings?: boolean;
   confirm_presented?: boolean;
 }) {
-  // Se o editor atestou a apresentação do autor, registra imediatamente
-  if (data.confirm_presented) {
-    db.prepare(`
-      UPDATE papers 
-      SET is_presented = 1, presented_at = CURRENT_TIMESTAMP, presented_by = 'Editor (Decisão Editorial)' 
-      WHERE id = ?
-    `).run(data.paper_id);
-
-    // Disparar certificado de apresentação se confirmado no modal
-    try {
-      sendPresentationCertificateEmail(data.paper_id).catch((e) => console.error("Erro ao emitir/enviar declaração de apresentação:", e));
-    } catch {}
-  }
-
-  // Inserir registro de decisão
-  const stmt = db.prepare(`
-    INSERT INTO edit_decisions (paper_id, director_id, decision, comments)
-    VALUES (?, ?, ?, ?)
-  `);
-  stmt.run(data.paper_id, data.director_id, data.decision, data.comments);
-
-  // Se a decisão for revisões requeridas, dispara e-mail com as instruções aos autores
-  if (data.decision === "revisions") {
-    try {
-      sendRevisionRequiredEmail(data.paper_id, data.comments).catch((e) => console.error("Erro ao enviar email de revisões:", e));
-    } catch {}
-  }
-
-  // Mapear decisão para o status do artigo
-  let newStatus: string = data.decision === "accept" ? "accepted" : data.decision === "revisions" ? "revisions_required" : "rejected";
-
-  // TRAVA DE PUBLICAÇÃO: Só publica se for aceito E estiver apresentado!
-  const currentPaper = db.prepare("SELECT is_presented FROM papers WHERE id = ?").get(data.paper_id) as { is_presented: number } | undefined;
-  const isPresented = (currentPaper && currentPaper.is_presented === 1) || !!data.confirm_presented;
-
-  if (data.decision === "accept" && data.publish_proceedings) {
-    if (isPresented) {
-      newStatus = "published";
-    } else {
-      // Trava ativa: fica como 'accepted' mas não publica nos anais até apresentação
-      newStatus = "accepted";
+  runInTransaction(() => {
+    if (data.confirm_presented) {
+      db.prepare(`
+        UPDATE papers 
+        SET is_presented = 1, presented_at = CURRENT_TIMESTAMP, presented_by = 'Editor (Decisão Editorial)' 
+        WHERE id = ?
+      `).run(data.paper_id);
     }
-  }
 
-  db.prepare("UPDATE papers SET status = ?, date_decided = CURRENT_TIMESTAMP WHERE id = ?").run(newStatus, data.paper_id);
+    db.prepare(`
+      INSERT INTO edit_decisions (paper_id, director_id, decision, comments)
+      VALUES (?, ?, ?, ?)
+    `).run(data.paper_id, data.director_id, data.decision, data.comments);
+
+    let newStatus: string = data.decision === "accept" ? "accepted" : data.decision === "revisions" ? "revisions_required" : "rejected";
+
+    const currentPaper = db.prepare("SELECT is_presented FROM papers WHERE id = ?").get(data.paper_id) as { is_presented: number } | undefined;
+    const isPresented = (currentPaper && currentPaper.is_presented === 1) || Boolean(data.confirm_presented);
+
+    if (data.decision === "accept" && data.publish_proceedings && isPresented) {
+      newStatus = "published";
+    }
+
+    db.prepare("UPDATE papers SET status = ?, date_decided = CURRENT_TIMESTAMP WHERE id = ?").run(newStatus, data.paper_id);
+  });
+
+  // Efeitos colaterais assíncronos executados somente após COMMIT
+  if (data.confirm_presented) {
+    sendPresentationCertificateEmail(data.paper_id).catch((e) =>
+      console.error("Erro ao emitir/enviar declaração de apresentação:", e)
+    );
+  }
+  if (data.decision === "revisions") {
+    sendRevisionRequiredEmail(data.paper_id, data.comments).catch((e) =>
+      console.error("Erro ao enviar email de revisões:", e)
+    );
+  }
 }
 
 export function registerAttendee(data: {
@@ -1060,24 +1236,24 @@ export function generateSubmissionsReportCsv(schedConfId?: number): string {
       : "N/A";
 
     rows.push([
-      `#${p.id}`,
-      `"${(p.title || "").replace(/"/g, '""')}"`,
-      `"${p.sched_title || ""}"`,
-      `"${p.track_title || ""}"`,
-      `"${p.presentation_type || ""}"`,
-      `"${p.status}"`,
-      p.is_presented === 1 ? "SIM (Apresentado)" : "NÃO (Pendente/No-Show)",
-      p.presented_at || "N/A",
-      p.presented_by || "N/A",
-      `"${primary?.full_name || p.author_name || ""}"`,
-      `"${primary?.email || p.author_email || ""}"`,
-      `"${primary?.affiliation || ""}"`,
-      `"${primary?.orcid || ""}"`,
-      `"${coauthors.replace(/"/g, '""')}"`,
-      String(p.reviews?.length || 0),
-      avgScore,
-      `"${(p.funding || "Nenhum").replace(/"/g, '""')}"`,
-      p.date_submitted
+      escapeCsvCell(`#${p.id}`),
+      escapeCsvCell(p.title || ""),
+      escapeCsvCell(p.sched_title || ""),
+      escapeCsvCell(p.track_title || ""),
+      escapeCsvCell(p.presentation_type || ""),
+      escapeCsvCell(p.status),
+      escapeCsvCell(p.is_presented === 1 ? "SIM (Apresentado)" : "NÃO (Pendente/No-Show)"),
+      escapeCsvCell(p.presented_at || "N/A"),
+      escapeCsvCell(p.presented_by || "N/A"),
+      escapeCsvCell(primary?.full_name || p.author_name || ""),
+      escapeCsvCell(primary?.email || p.author_email || ""),
+      escapeCsvCell(primary?.affiliation || ""),
+      escapeCsvCell(primary?.orcid || ""),
+      escapeCsvCell(coauthors),
+      escapeCsvCell(String(p.reviews?.length || 0)),
+      escapeCsvCell(avgScore),
+      escapeCsvCell(p.funding || "Nenhum"),
+      escapeCsvCell(p.date_submitted)
     ]);
   }
 
@@ -1108,18 +1284,18 @@ export function generatePresentationsReportCsv(schedConfId?: number): string {
   for (const s of schedule) {
     const paper = getPaperById(s.paper_id);
     rows.push([
-      `#${s.paper_id}`,
-      `"${(s.paper_title || "").replace(/"/g, '""')}"`,
-      `"${s.track_title || ""}"`,
-      s.modality === "online" ? "Online / Remoto" : "Presencial",
-      `"${s.room_name || ""}"`,
-      `"${s.building || ""}"`,
-      s.date,
-      s.start_time,
-      s.end_time,
-      `"${(s.authors || "").replace(/"/g, '""')}"`,
-      paper?.is_presented === 1 ? "APRESENTADO (Presença Confirmada)" : "PENDENTE / NO-SHOW",
-      `"${s.meeting_url || ""}"`
+      escapeCsvCell(`#${s.paper_id}`),
+      escapeCsvCell(s.paper_title || ""),
+      escapeCsvCell(s.track_title || ""),
+      escapeCsvCell(s.modality === "online" ? "Online / Remoto" : "Presencial"),
+      escapeCsvCell(s.room_name || ""),
+      escapeCsvCell(s.building || ""),
+      escapeCsvCell(s.date),
+      escapeCsvCell(s.start_time),
+      escapeCsvCell(s.end_time),
+      escapeCsvCell(s.authors || ""),
+      escapeCsvCell(paper?.is_presented === 1 ? "APRESENTADO (Presença Confirmada)" : "PENDENTE / NO-SHOW"),
+      escapeCsvCell(s.meeting_url || "")
     ]);
   }
 
@@ -1145,20 +1321,21 @@ export function generateMetadataReportCsv(schedConfId?: number): string {
     ]
   ];
 
+  const appBaseUrl = getAppBaseUrl();
   for (const p of papers) {
     const authorsStr = p.authors?.map(a => `${a.full_name} [ORCID: ${a.orcid || "N/A"}] (${a.affiliation})`).join("; ") || "";
     rows.push([
-      `#${p.id}`,
-      `"${(p.title || "").replace(/"/g, '""')}"`,
-      p.doi ? `https://doi.org/${p.doi}` : "Em processo",
-      `http://localhost:3000/paper/${p.id}`,
-      p.isbn || "",
-      p.city || "",
-      `${p.page_start || 1} - ${p.page_end || 5}`,
-      `"${p.track_title || ""}"`,
-      `"${authorsStr.replace(/"/g, '""')}"`,
-      `"${(p.funding || "").replace(/"/g, '""')}"`,
-      p.is_presented === 1 ? "SIM" : "NÃO"
+      escapeCsvCell(`#${p.id}`),
+      escapeCsvCell(p.title || ""),
+      escapeCsvCell(p.doi ? `https://doi.org/${p.doi}` : "Em processo"),
+      escapeCsvCell(`${appBaseUrl}/paper/${p.id}`),
+      escapeCsvCell(p.isbn || ""),
+      escapeCsvCell(p.city || ""),
+      escapeCsvCell(`${p.page_start || 1} - ${p.page_end || 5}`),
+      escapeCsvCell(p.track_title || ""),
+      escapeCsvCell(authorsStr),
+      escapeCsvCell(p.funding || ""),
+      escapeCsvCell(p.is_presented === 1 ? "SIM" : "NÃO")
     ]);
   }
 
@@ -1179,46 +1356,94 @@ export function escapeXml(unsafe: string | null | undefined): string {
     .replace(/'/g, "&apos;");
 }
 
-export { parseReferences } from "./references";
-import { parseReferences } from "./references";
+export { parseReferences } from "./references.ts";
+import { parseReferences } from "./references.ts";
 
 export function generateCrossrefXml(options?: {
   schedConfId?: number;
   paperId?: number;
   baseUrl?: string;
 }): string {
-  const baseUrl = options?.baseUrl || "http://localhost:3000";
+  const baseUrl = getAppBaseUrl(options?.baseUrl);
   let papers: Paper[] = [];
-  let schedConf: SchedConf | undefined;
+  type SchedConfCrossref = SchedConf & { conference_title?: string; contact_email?: string; contact_name?: string };
+  let schedConf: SchedConfCrossref | undefined;
 
   if (options?.paperId) {
     const single = getPaperById(options.paperId);
     if (single) {
       papers = [single];
       schedConf = db.prepare(`
-        SELECT sc.*, c.title as conference_title, c.contact_email 
+        SELECT sc.*, c.title as conference_title, c.contact_email, c.contact_name
         FROM sched_confs sc 
         JOIN conferences c ON c.id = sc.conference_id 
         WHERE sc.id = ?
-      `).get(single.sched_conf_id) as unknown as SchedConf | undefined;
+      `).get(single.sched_conf_id) as unknown as SchedConfCrossref | undefined;
     }
   } else {
     const confId = options?.schedConfId || 1;
     papers = getPublishedProceedings(confId);
     schedConf = db.prepare(`
-      SELECT sc.*, c.title as conference_title, c.contact_email 
+      SELECT sc.*, c.title as conference_title, c.contact_email, c.contact_name
       FROM sched_confs sc 
       JOIN conferences c ON c.id = sc.conference_id 
       WHERE sc.id = ?
-    `).get(confId) as unknown as SchedConf | undefined;
+    `).get(confId) as unknown as SchedConfCrossref | undefined;
   }
 
-  const batchId = `ocs_${schedConf?.slug || "citeca2026"}_${Date.now()}`;
+  const parseDateParts = (iso?: string | null) => {
+    const m = String(iso || "").match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (m) return { year: m[1], month: m[2], day: m[3] };
+    const now = new Date();
+    return {
+      year: String(now.getFullYear()),
+      month: String(now.getMonth() + 1).padStart(2, "0"),
+      day: String(now.getDate()).padStart(2, "0"),
+    };
+  };
+
+  const startParts = parseDateParts(schedConf?.start_date);
+  const endParts = parseDateParts(schedConf?.end_date || schedConf?.start_date);
+  const pubYear = startParts.year;
+
+  const batchId = `ocw_${schedConf?.slug || "proceedings"}_${Date.now()}`;
   const timestamp = Date.now();
-  const confTitle = schedConf?.title || "X CITECA 2026";
-  const confAcronym = schedConf?.acronym || "CITECA 2026";
-  const confCity = schedConf?.city || schedConf?.location || "Poços de Caldas, MG, Brasil";
-  const proceedingsDoi = schedConf?.proceedings_doi || "10.1234/citeca.2026.proceedings";
+  const confTitle = schedConf?.title || "Open Conference Werneckiana";
+  const confAcronym = schedConf?.acronym || "OCW";
+  const confCity = schedConf?.city || schedConf?.location || "Brasil";
+  const proceedingsDoi = schedConf?.proceedings_doi || "";
+  const depositorEmail = schedConf?.contact_email || "editor@ocw.org";
+
+  const editorRows = db.prepare(`
+    SELECT full_name, affiliation, orcid
+    FROM users
+    WHERE role IN ('director', 'manager')
+    ORDER BY id ASC
+    LIMIT 5
+  `).all() as Array<{ full_name: string; affiliation: string | null; orcid: string | null }>;
+
+  const editorsList =
+    editorRows.length > 0
+      ? editorRows
+      : [{ full_name: schedConf?.contact_name || "Comissão Editorial", affiliation: schedConf?.conference_title || "OCW", orcid: null }];
+
+  const editorsXml = editorsList
+    .map((ed, idx) => {
+      const parts = (ed.full_name || "Editor").trim().split(/\s+/);
+      const surname = parts.length > 1 ? parts.pop()! : parts[0];
+      const givenName = parts.length > 0 ? parts.join(" ") : surname;
+      const seq = idx === 0 ? "first" : "additional";
+      let orcid = ed.orcid?.trim();
+      if (orcid && !orcid.startsWith("http")) orcid = `https://orcid.org/${orcid}`;
+      return `
+          <person_name contributor_role="editor" sequence="${seq}">
+            <given_name>${escapeXml(givenName)}</given_name>
+            <surname>${escapeXml(surname)}</surname>
+            ${ed.affiliation ? `<affiliation>${escapeXml(ed.affiliation)}</affiliation>` : ""}
+            ${orcid ? `<ORCID>${escapeXml(orcid)}</ORCID>` : ""}
+          </person_name>`;
+    })
+    .join("");
 
   const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <doi_batch xmlns="http://www.crossref.org/schema/4.4.2"
@@ -1229,10 +1454,10 @@ export function generateCrossrefXml(options?: {
     <doi_batch_id>${escapeXml(batchId)}</doi_batch_id>
     <timestamp>${timestamp}</timestamp>
     <depositor>
-      <depositor_name>Open Conference Systems (OCS PKP)</depositor_name>
-      <email_address>contato@citeca2026.academic.org</email_address>
+      <depositor_name>${escapeXml(schedConf?.conference_title || "Open Conference Werneckiana")}</depositor_name>
+      <email_address>${escapeXml(depositorEmail)}</email_address>
     </depositor>
-    <registrant>PKP Open Conference Systems</registrant>
+    <registrant>Open Conference Werneckiana</registrant>
   </head>
   <body>
     <conference>
@@ -1240,44 +1465,32 @@ export function generateCrossrefXml(options?: {
         <conference_name>${escapeXml(confTitle)}</conference_name>
         <conference_acronym>${escapeXml(confAcronym)}</conference_acronym>
         <conference_location>${escapeXml(confCity)}</conference_location>
-        <conference_date start_day="10" start_month="11" start_year="2026" end_day="13" end_month="11" end_year="2026"/>
+        <conference_date start_day="${startParts.day}" start_month="${startParts.month}" start_year="${startParts.year}" end_day="${endParts.day}" end_month="${endParts.month}" end_year="${endParts.year}"/>
       </event_metadata>
       <proceedings_metadata>
         <proceedings_title>${escapeXml("Anais do " + confTitle)}</proceedings_title>
-        <contributors>
-          <person_name contributor_role="editor" sequence="first">
-            <given_name>Carlos Eduardo</given_name>
-            <surname>Dias</surname>
-            <affiliation>Universidade Estadual de Campinas (UNICAMP)</affiliation>
-            <ORCID>https://orcid.org/0000-0003-4567-8901</ORCID>
-          </person_name>
-          <person_name contributor_role="editor" sequence="additional">
-            <given_name>Eduardo Augusto</given_name>
-            <surname>Werneck Ribeiro</surname>
-            <affiliation>Open Conference Werneckiana</affiliation>
-            <ORCID>https://orcid.org/0000-0002-1825-0097</ORCID>
-          </person_name>
+        <contributors>${editorsXml}
         </contributors>
         <publisher>
-          <publisher_name>${escapeXml(schedConf?.conference_title || "Universidade Federal de Alfenas")}</publisher_name>
+          <publisher_name>${escapeXml(schedConf?.conference_title || "Open Conference Werneckiana")}</publisher_name>
         </publisher>
         <publication_date>
-          <year>2026</year>
+          <year>${pubYear}</year>
         </publication_date>
-        ${schedConf?.isbn ? `<isbn>${escapeXml(schedConf.isbn)}</isbn>` : `<isbn>978-65-89123-45-6</isbn>`}
-        <doi_data>
+        ${schedConf?.isbn ? `<isbn>${escapeXml(schedConf.isbn)}</isbn>` : ""}
+        ${proceedingsDoi ? `<doi_data>
           <doi>${escapeXml(proceedingsDoi)}</doi>
           <resource>${escapeXml(`${baseUrl}/proceedings`)}</resource>
-        </doi_data>
+        </doi_data>` : ""}
       </proceedings_metadata>
       ${papers.map((p) => {
-        const paperDoi = p.doi || `10.1234/citeca.2026.p${String(p.id).padStart(2, "0")}`;
+        const paperDoi = p.doi || (proceedingsDoi ? `${proceedingsDoi}.p${String(p.id).padStart(2, "0")}` : "");
         const authorsList: PaperAuthor[] = (p.authors && p.authors.length > 0) 
           ? p.authors 
-          : [{ full_name: "Autor OCS", affiliation: "Universidade", email: "autor@ocs.org", is_primary: 1, seq: 1 }];
+          : [{ full_name: "Autor", affiliation: "", email: "", is_primary: 1, seq: 1 }];
         const authorsXml = authorsList
           .map((a, idx) => {
-            const parts = (a.full_name || "Autor").trim().split(" ");
+            const parts = (a.full_name || "Autor").trim().split(/\s+/);
             const surname = parts.length > 1 ? parts.pop()! : parts[0];
             const givenName = parts.length > 0 ? parts.join(" ") : surname;
             const seq = idx === 0 ? "first" : "additional";
@@ -1303,7 +1516,7 @@ export function generateCrossrefXml(options?: {
           <title>${escapeXml(p.title)}</title>
         </titles>
         <publication_date>
-          <year>2026</year>
+          <year>${pubYear}</year>
         </publication_date>
         <jats:abstract xmlns:jats="http://www.ncbi.nlm.nih.gov/JATS1">
           <jats:p>${escapeXml(p.abstract)}</jats:p>
@@ -1312,10 +1525,10 @@ export function generateCrossrefXml(options?: {
         <fr:program xmlns:fr="http://www.crossref.org/fundref.xsd" name="fundref">
           <fr:assertion name="funder_name">${escapeXml(p.funding)}</fr:assertion>
         </fr:program>` : ""}
-        <doi_data>
+        ${paperDoi ? `<doi_data>
           <doi>${escapeXml(paperDoi)}</doi>
           <resource>${escapeXml(`${baseUrl}/paper/${p.id}`)}</resource>
-        </doi_data>
+        </doi_data>` : ""}
         ${(() => {
           const refs = parseReferences(p.references_text);
           if (refs.length === 0) return "";
@@ -1340,15 +1553,17 @@ export function generateCrossrefXml(options?: {
 export function generateOaiPmhResponse(
   verb: string | null | undefined,
   params: Record<string, string | undefined>,
-  baseUrl: string = "http://localhost:3000"
+  baseUrl?: string
 ): string {
-  const oaiBase = `${baseUrl}/api/oai`;
+  const resolvedBase = getAppBaseUrl(baseUrl);
+  const oaiBase = `${resolvedBase}/api/oai`;
   const responseDate = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
   const validVerbs = ["Identify", "ListMetadataFormats", "ListSets", "ListIdentifiers", "ListRecords", "GetRecord"];
+  const oaiDateRe = /^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}Z)?$/;
 
   const buildRequestTag = (attrs: Record<string, string | undefined>) => {
     const attrString = Object.entries(attrs)
-      .filter(([_, val]) => Boolean(val))
+      .filter(([, val]) => Boolean(val))
       .map(([key, val]) => `${key}="${escapeXml(val!)}"`)
       .join(" ");
     return `<request ${attrString}>${escapeXml(oaiBase)}</request>`;
@@ -1368,31 +1583,50 @@ export function generateOaiPmhResponse(
   <error code="badVerb">Illegal or missing OAI-PMH verb: '${escapeXml(verb || "")}'</error>${footer}`;
   }
 
+  if (params.resumptionToken) {
+    return `${header}
+  ${buildRequestTag({ verb, resumptionToken: params.resumptionToken })}
+  <error code="badResumptionToken">Invalid or expired resumptionToken.</error>${footer}`;
+  }
+
+  const getPaperDatestamp = (paper: Paper): string => {
+    const raw = (paper.date_decided || paper.date_submitted || "").trim();
+    const m = raw.match(/^(\d{4}-\d{2}-\d{2})/);
+    return m ? `${m[1]}T00:00:00Z` : "2026-01-01T00:00:00Z";
+  };
+
+  const getPaperSetSpec = (paper: Paper): string => {
+    return `proceedings:${paper.conf_slug || "ocw"}:${paper.sched_slug || String(paper.sched_conf_id)}`;
+  };
+
   // 1. Identify
   if (verb === "Identify") {
+    const primaryConf = db.prepare("SELECT title, contact_email FROM conferences ORDER BY id ASC LIMIT 1").get() as
+      | { title: string; contact_email: string | null }
+      | undefined;
     return `${header}
   ${buildRequestTag({ verb: "Identify" })}
   <Identify>
-    <repositoryName>Open Conference Systems (OCS 2.3.6 Academic Clone Repository)</repositoryName>
+    <repositoryName>${escapeXml(primaryConf?.title || "Open Conference Werneckiana")}</repositoryName>
     <baseURL>${escapeXml(oaiBase)}</baseURL>
     <protocolVersion>2.0</protocolVersion>
-    <adminEmail>editor@citeca2026.academic.org</adminEmail>
-    <earliestDatestamp>2026-01-01T00:00:00Z</earliestDatestamp>
+    <adminEmail>${escapeXml(primaryConf?.contact_email || "editor@ocw.org")}</adminEmail>
+    <earliestDatestamp>2020-01-01T00:00:00Z</earliestDatestamp>
     <deletedRecord>no</deletedRecord>
     <granularity>YYYY-MM-DDThh:mm:ssZ</granularity>
     <description>
       <oai-identifier xmlns="http://www.openarchives.org/OAI/2.0/oai-identifier"
                       xsi:schemaLocation="http://www.openarchives.org/OAI/2.0/oai-identifier http://www.openarchives.org/OAI/2.0/oai-identifier.xsd">
         <scheme>oai</scheme>
-        <repositoryIdentifier>ocs.academic.org</repositoryIdentifier>
+        <repositoryIdentifier>ocw.academic.org</repositoryIdentifier>
         <delimiter>:</delimiter>
-        <sampleIdentifier>oai:ocs.academic.org:paper/1</sampleIdentifier>
+        <sampleIdentifier>oai:ocw.academic.org:paper/1</sampleIdentifier>
       </oai-identifier>
     </description>
   </Identify>${footer}`;
   }
 
-  // 2. ListMetadataFormats
+  // 2. ListMetadataFormats (apenas oai_dc, efetivamente implementado)
   if (verb === "ListMetadataFormats") {
     return `${header}
   ${buildRequestTag({ verb: "ListMetadataFormats", identifier: params.identifier })}
@@ -1402,44 +1636,47 @@ export function generateOaiPmhResponse(
       <schema>http://www.openarchives.org/OAI/2.0/oai_dc.xsd</schema>
       <metadataNamespace>http://www.openarchives.org/OAI/2.0/oai_dc/</metadataNamespace>
     </metadataFormat>
-    <metadataFormat>
-      <metadataPrefix>cr_xml</metadataPrefix>
-      <schema>http://www.crossref.org/schemas/crossref4.4.2.xsd</schema>
-      <metadataNamespace>http://www.crossref.org/schema/4.4.2</metadataNamespace>
-    </metadataFormat>
   </ListMetadataFormats>${footer}`;
   }
 
-  // 3. ListSets
+  // 3. ListSets (dinâmico por edição)
   if (verb === "ListSets") {
+    const volumes = getProceedingsVolumes();
     return `${header}
   ${buildRequestTag({ verb: "ListSets" })}
-  <ListSets>
+  <ListSets>${volumes
+      .map(
+        (v) => `
     <set>
-      <setSpec>proceedings:citeca2026</setSpec>
-      <setName>Anais do X CITECA 2026 - Conferência Internacional de Tecnologia e Educação</setName>
+      <setSpec>${escapeXml(`proceedings:${v.conf_slug}:${v.sched_slug}`)}</setSpec>
+      <setName>${escapeXml(`Anais de ${v.sched_title}`)}</setName>
       <setDescription>
         <oai_dc:dc xmlns:oai_dc="http://www.openarchives.org/OAI/2.0/oai_dc/"
                    xmlns:dc="http://purl.org/dc/elements/1.1/">
-          <dc:description>Artigos científicos completos aprovados e publicados nos anais oficiais.</dc:description>
+          <dc:description>${escapeXml(`${v.conference_title} (${v.city})`)}</dc:description>
         </oai_dc:dc>
       </setDescription>
-    </set>
+    </set>`
+      )
+      .join("")}
   </ListSets>${footer}`;
   }
 
   const prefix = params.metadataPrefix;
-  if (prefix && prefix !== "oai_dc" && prefix !== "cr_xml") {
+  if (prefix && prefix !== "oai_dc") {
     return `${header}
   ${buildRequestTag({ verb, metadataPrefix: prefix })}
   <error code="cannotDisseminateFormat">The metadata format '${escapeXml(prefix)}' is not supported by this repository. Use 'oai_dc'.</error>${footer}`;
   }
 
-  // Helper para renderizar registro individual DC
   const renderRecordDc = (paper: Paper) => {
-    const paperUrl = `${baseUrl}/paper/${paper.id}`;
+    const paperUrl = `${resolvedBase}/paper/${paper.id}`;
     const doiUrl = paper.doi ? `https://doi.org/${paper.doi}` : paperUrl;
-    const authorsDc = (paper.authors || []).map(a => {
+    const datestamp = getPaperDatestamp(paper);
+    const pubYear = datestamp.slice(0, 4);
+    const setSpec = getPaperSetSpec(paper);
+
+    const authorsDc = (paper.authors || []).map((a) => {
       let val = a.full_name;
       if (a.affiliation) val += ` (${a.affiliation})`;
       if (a.orcid) val += ` [ORCID: ${a.orcid}]`;
@@ -1448,17 +1685,17 @@ export function generateOaiPmhResponse(
 
     const keywordsDc = (paper.keywords || "")
       .split(",")
-      .map(k => k.trim())
+      .map((k) => k.trim())
       .filter(Boolean)
-      .map(k => `<dc:subject>${escapeXml(k)}</dc:subject>`)
+      .map((k) => `<dc:subject>${escapeXml(k)}</dc:subject>`)
       .join("\n        ");
 
     return `
     <record>
       <header>
-        <identifier>oai:ocs.academic.org:paper/${paper.id}</identifier>
-        <datestamp>${escapeXml(paper.date_submitted ? paper.date_submitted.split(" ")[0] + "T00:00:00Z" : "2026-10-15T00:00:00Z")}</datestamp>
-        <setSpec>proceedings:citeca2026</setSpec>
+        <identifier>oai:ocw.academic.org:paper/${paper.id}</identifier>
+        <datestamp>${escapeXml(datestamp)}</datestamp>
+        <setSpec>${escapeXml(setSpec)}</setSpec>
       </header>
       <metadata>
         <oai_dc:dc 
@@ -1470,20 +1707,20 @@ export function generateOaiPmhResponse(
           ${authorsDc}
           ${keywordsDc}
           <dc:description>${escapeXml(paper.abstract)}</dc:description>
-          <dc:publisher>PKP Open Conference Systems - Universidade Federal de Alfenas</dc:publisher>
-          <dc:date>2026</dc:date>
+          <dc:publisher>${escapeXml(paper.conference_title || "Open Conference Werneckiana")}</dc:publisher>
+          <dc:date>${escapeXml(pubYear)}</dc:date>
           <dc:type>info:eu-repo/semantics/conferenceObject</dc:type>
           <dc:type>Conference Proceedings Paper</dc:type>
-          <dc:format>application/pdf</dc:format>
+          <dc:format>text/html</dc:format>
           <dc:identifier>${escapeXml(doiUrl)}</dc:identifier>
           <dc:identifier>${escapeXml(paperUrl)}</dc:identifier>
           ${paper.isbn ? `<dc:identifier>urn:isbn:${escapeXml(paper.isbn)}</dc:identifier>` : ""}
-          <dc:source>${escapeXml("Anais do " + (paper.sched_title || "X CITECA 2026") + ", " + (paper.city || "Poços de Caldas, MG, Brasil") + (paper.isbn ? ` (ISBN: ${paper.isbn})` : ""))}</dc:source>
+          <dc:source>${escapeXml("Anais de " + (paper.sched_title || "OCW") + (paper.city ? `, ${paper.city}` : "") + (paper.isbn ? ` (ISBN: ${paper.isbn})` : ""))}</dc:source>
           <dc:language>por</dc:language>
           <dc:rights>info:eu-repo/semantics/openAccess</dc:rights>
           <dc:rights>Creative Commons Attribution 4.0 International (CC BY 4.0)</dc:rights>
           ${paper.funding ? `<dc:relation>${escapeXml("Financiamento: " + paper.funding)}</dc:relation>` : ""}
-          ${parseReferences(paper.references_text).map(ref => `<dc:relation>${escapeXml("Referência citada: " + ref.raw)}</dc:relation>`).join("\n          ")}
+          ${parseReferences(paper.references_text).map((ref) => `<dc:relation>${escapeXml("Referência citada: " + ref.raw)}</dc:relation>`).join("\n          ")}
         </oai_dc:dc>
       </metadata>
     </record>`;
@@ -1501,7 +1738,7 @@ export function generateOaiPmhResponse(
     const paperId = idMatch ? parseInt(idMatch[1], 10) : parseInt(rawId, 10);
 
     const paper = paperId ? getPaperById(paperId) : null;
-    if (!paper || paper.status !== "published") {
+    if (!paper || paper.status !== "published" || paper.is_presented !== 1) {
       return `${header}
   ${buildRequestTag({ verb, identifier: rawId, metadataPrefix: prefix })}
   <error code="idDoesNotExist">No matching record found for identifier '${escapeXml(rawId)}'</error>${footer}`;
@@ -1514,36 +1751,54 @@ export function generateOaiPmhResponse(
   </GetRecord>${footer}`;
   }
 
-  // 5. ListIdentifiers
-  if (verb === "ListIdentifiers") {
+  // Filtragem comum para ListIdentifiers e ListRecords
+  if (verb === "ListIdentifiers" || verb === "ListRecords") {
     if (!prefix) {
       return `${header}
   ${buildRequestTag({ verb })}
   <error code="badArgument">missing required argument 'metadataPrefix'</error>${footer}`;
     }
-    const papers = getPublishedProceedings();
-    return `${header}
-  ${buildRequestTag({ verb, metadataPrefix: prefix })}
-  <ListIdentifiers>
-    ${papers.map(p => `
-    <header>
-      <identifier>oai:ocs.academic.org:paper/${p.id}</identifier>
-      <datestamp>${escapeXml(p.date_submitted ? p.date_submitted.split(" ")[0] + "T00:00:00Z" : "2026-10-15T00:00:00Z")}</datestamp>
-      <setSpec>proceedings:citeca2026</setSpec>
-    </header>`).join("")}
-  </ListIdentifiers>${footer}`;
-  }
+    if ((params.from && !oaiDateRe.test(params.from)) || (params.until && !oaiDateRe.test(params.until))) {
+      return `${header}
+  ${buildRequestTag({ verb, metadataPrefix: prefix, from: params.from, until: params.until, set: params.set })}
+  <error code="badArgument">Invalid 'from' or 'until' date format.</error>${footer}`;
+    }
 
-  // 6. ListRecords
-  if (verb === "ListRecords") {
-    if (!prefix) {
+    const fromDate = params.from ? params.from.slice(0, 10) : null;
+    const untilDate = params.until ? params.until.slice(0, 10) : null;
+    const papers = getPublishedProceedings().filter((p) => {
+      if (params.set && getPaperSetSpec(p) !== params.set) return false;
+      const ds = getPaperDatestamp(p).slice(0, 10);
+      if (fromDate && ds < fromDate) return false;
+      if (untilDate && ds > untilDate) return false;
+      return true;
+    });
+
+    if (papers.length === 0) {
       return `${header}
-  ${buildRequestTag({ verb })}
-  <error code="badArgument">missing required argument 'metadataPrefix'</error>${footer}`;
+  ${buildRequestTag({ verb, metadataPrefix: prefix, from: params.from, until: params.until, set: params.set })}
+  <error code="noRecordsMatch">No records match the specified criteria.</error>${footer}`;
     }
-    const papers = getPublishedProceedings();
+
+    if (verb === "ListIdentifiers") {
+      return `${header}
+  ${buildRequestTag({ verb, metadataPrefix: prefix, from: params.from, until: params.until, set: params.set })}
+  <ListIdentifiers>
+    ${papers
+      .map(
+        (p) => `
+    <header>
+      <identifier>oai:ocw.academic.org:paper/${p.id}</identifier>
+      <datestamp>${escapeXml(getPaperDatestamp(p))}</datestamp>
+      <setSpec>${escapeXml(getPaperSetSpec(p))}</setSpec>
+    </header>`
+      )
+      .join("")}
+  </ListIdentifiers>${footer}`;
+    }
+
     return `${header}
-  ${buildRequestTag({ verb, metadataPrefix: prefix })}
+  ${buildRequestTag({ verb, metadataPrefix: prefix, from: params.from, until: params.until, set: params.set })}
   <ListRecords>
     ${papers.map(renderRecordDc).join("")}
   </ListRecords>${footer}`;
@@ -1569,73 +1824,73 @@ export function createConference(data: {
   isbn?: string;
   description: string;
 }): { conferenceId: number; schedConfId: number } {
-  // 1. Inserir conferência principal
-  const confResult = db.prepare(`
-    INSERT INTO conferences (slug, title, acronym, description, contact_name, contact_email)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `).run(
-    data.slug,
-    data.title,
-    data.acronym,
-    data.description,
-    "Comissão Organizadora",
-    `contato@${data.slug}.org`
-  );
-  const conferenceId = Number(confResult.lastInsertRowid);
+  return runInTransaction(() => {
+    const confResult = db.prepare(`
+      INSERT INTO conferences (slug, title, acronym, description, contact_name, contact_email)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(
+      data.slug,
+      data.title,
+      data.acronym,
+      data.description,
+      "Comissão Organizadora",
+      `contato@${data.slug}.org`
+    );
+    const conferenceId = Number(confResult.lastInsertRowid);
 
-  // 2. Inserir edição agendada dos anais
-  const schedResult = db.prepare(`
-    INSERT INTO sched_confs (
-      conference_id, slug, title, acronym, location, city, proceedings_doi, isbn,
-      start_date, end_date, cfp_deadline, review_deadline, results_date, description, is_active
-    )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
-  `).run(
-    conferenceId,
-    data.slug,
-    data.title,
-    data.acronym,
-    data.location || data.city,
-    data.city,
-    data.proceedings_doi || `10.5281/zenodo.${data.slug}`,
-    data.isbn || "978-65-89123-99-9",
-    data.start_date,
-    data.end_date,
-    data.cfp_deadline,
-    data.review_deadline,
-    data.results_date,
-    data.description
-  );
-  const schedConfId = Number(schedResult.lastInsertRowid);
+    const schedResult = db.prepare(`
+      INSERT INTO sched_confs (
+        conference_id, slug, title, acronym, location, city, proceedings_doi, isbn,
+        start_date, end_date, cfp_deadline, review_deadline, results_date, description, is_active
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+    `).run(
+      conferenceId,
+      data.slug,
+      data.title,
+      data.acronym,
+      data.location || data.city,
+      data.city,
+      data.proceedings_doi || `10.5281/zenodo.${data.slug}`,
+      data.isbn || "",
+      data.start_date,
+      data.end_date,
+      data.cfp_deadline,
+      data.review_deadline,
+      data.results_date,
+      data.description
+    );
+    const schedConfId = Number(schedResult.lastInsertRowid);
 
-  // 3. Criar trilhas temáticas padrão
-  db.prepare(`
-    INSERT INTO tracks (sched_conf_id, title, abbreviation, description, max_words)
-    VALUES (?, ?, ?, ?, ?)
-  `).run(
-    schedConfId,
-    "Trilha 1: Inteligência Artificial, Dados e Ciência Aberta",
-    "IA-CA",
-    "Estudos computacionais, modelos de linguagem e protocolos de Ciência Aberta",
-    2000
-  );
+    db.prepare(`
+      INSERT INTO tracks (sched_conf_id, title, abbreviation, description, max_words)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(
+      schedConfId,
+      "Trilha 1: Inteligência Artificial, Dados e Ciência Aberta",
+      "IA-CA",
+      "Estudos computacionais, modelos de linguagem e protocolos de Ciência Aberta",
+      2000
+    );
 
-  db.prepare(`
-    INSERT INTO tracks (sched_conf_id, title, abbreviation, description, max_words)
-    VALUES (?, ?, ?, ?, ?)
-  `).run(
-    schedConfId,
-    "Trilha 2: Educação, Inovação e Tecnologias Contemporâneas",
-    "ED-INOV",
-    "Práticas pedagógicas, inovação acadêmica e comunicação científica",
-    2000
-  );
+    db.prepare(`
+      INSERT INTO tracks (sched_conf_id, title, abbreviation, description, max_words)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(
+      schedConfId,
+      "Trilha 2: Educação, Inovação e Tecnologias Contemporâneas",
+      "ED-INOV",
+      "Práticas pedagógicas, inovação acadêmica e comunicação científica",
+      2000
+    );
 
-  return { conferenceId, schedConfId };
+    return { conferenceId, schedConfId };
+  });
 }
 
 export function updateUserRole(userId: number, role: string): boolean {
   db.prepare("UPDATE users SET role = ? WHERE id = ?").run(role, userId);
+  revokeUserSessions(userId);
   return true;
 }
 

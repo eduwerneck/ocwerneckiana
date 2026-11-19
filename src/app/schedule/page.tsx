@@ -1,19 +1,24 @@
-import { getSchedule, getConferenceBySlug } from "@/lib/ocs-service";
+import { getSchedule, getActiveSchedConf } from "@/lib/ocs-service";
+import { parsePositiveInt } from "@/lib/validation";
 import ScheduleClient from "./ScheduleClient";
 
 export const dynamic = "force-dynamic";
 
-export default function SchedulePage() {
-  // SchedConf ID 1 = CITECA 2026
-  const scheduleItems = getSchedule(1);
-  const conf = getConferenceBySlug("citeca");
-  const schedConf = conf?.active_edition;
+export default async function SchedulePage({
+  searchParams,
+}: {
+  searchParams: Promise<{ schedConfId?: string }>;
+}) {
+  const resolved = await searchParams;
+  const requestedId = resolved?.schedConfId ? parsePositiveInt(resolved.schedConfId) ?? undefined : undefined;
+  const schedConf = getActiveSchedConf(requestedId);
+  const scheduleItems = schedConf ? getSchedule(schedConf.id) : [];
 
   return (
     <ScheduleClient
       scheduleItems={scheduleItems}
-      conferenceTitle={schedConf?.title || "X CITECA 2026"}
-      conferenceCity={schedConf?.city || "Poços de Caldas, MG, Brasil"}
+      conferenceTitle={schedConf?.title || "Programação Científica"}
+      conferenceCity={schedConf?.city || schedConf?.location || "Brasil"}
     />
   );
 }

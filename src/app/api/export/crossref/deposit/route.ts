@@ -1,39 +1,58 @@
 import { NextRequest, NextResponse } from "next/server";
-import { generateCrossrefXml } from "@/lib/ocs-service";
+import { generateCrossrefXml, getPublishedProceedings } from "@/lib/ocs-service";
+import { ADMIN_ROLES, requireApiAuth } from "@/lib/auth";
+import { getAppBaseUrl } from "@/lib/security";
+import { parsePositiveInt } from "@/lib/validation";
 
 export const dynamic = "force-dynamic";
 
 /**
- * Endpoint de Depósito Automatizado Crossref via API (HTTPS POST)
- * Permite que o Editor suba os metadados do evento/artigo diretamente para a conta da Crossref com 1 clique.
+ * Endpoint de Depósito Automatizado Crossref via API (HTTPS POST).
+ * Restrito a administradores/diretores autenticados.
  */
 export async function POST(req: NextRequest) {
+  const auth = await requireApiAuth(ADMIN_ROLES);
+  if (!auth.ok) return auth.response;
+
   try {
     const body = await req.json();
-    const { 
-      schedConfId = 1, 
-      username, 
-      password, 
-      environment = "sandbox" // "sandbox" (teste) ou "production"
-    } = body;
+    const schedConfId = parsePositiveInt(body?.schedConfId ?? 1);
+    const username = typeof body?.username === "string" ? body.username.trim() : "";
+    const password = typeof body?.password === "string" ? body.password : "";
+    const environment = body?.environment === "production" ? "production" : "sandbox";
 
-    const origin = req.nextUrl.origin || "http://localhost:3000";
-    
-    // Gerar o XML oficial no esquema Crossref 4.4.2 (doi_batch)
+    if (!schedConfId) {
+      return NextResponse.json({ success: false, message: "schedConfId inválido." }, { status: 400 });
+    }
+
+    const publishedPapers = getPublishedProceedings(schedConfId);
+    if (environment === "production" && publishedPapers.length === 0) {
+      return NextResponse.json(
+        { success: false, message: "Não há artigos publicados e apresentados nesta edição para depósito em produção." },
+        { status: 400 }
+      );
+    }
+
+    const baseUrl = getAppBaseUrl(req.nextUrl.origin);
     const xmlContent = generateCrossrefXml({
-      schedConfId: Number(schedConfId),
-      baseUrl: origin,
+      schedConfId,
+      baseUrl,
     });
 
-    // Se o usuário forneceu credenciais reais e optou por produção
-    if (environment === "production" && username && password) {
+    if (environment === "production") {
+      if (!username || !password) {
+        return NextResponse.json(
+          { success: false, message: "Credenciais da Crossref são obrigatórias no modo produção." },
+          { status: 400 }
+        );
+      }
+
       const crossrefUrl = "https://doi.crossref.org/servlet/deposit";
-      
       const formData = new FormData();
       formData.append("operation", "doMDUpload");
       formData.append("login_id", username);
       formData.append("login_passwd", password);
-      
+
       const blob = new Blob([xmlContent], { type: "application/xml" });
       formData.append("fname", blob, `crossref_deposit_sched_${schedConfId}.xml`);
 
@@ -41,6 +60,7 @@ export async function POST(req: NextRequest) {
         const response = await fetch(crossrefUrl, {
           method: "POST",
           body: formData,
+          signal: AbortSignal.timeout(15000),
         });
 
         const responseText = await response.text();
@@ -50,42 +70,49 @@ export async function POST(req: NextRequest) {
           status: response.status,
           mode: "production",
           submissionId: `CR-${Date.now()}`,
-          message: response.ok 
-            ? "Depósito transmitido com sucesso à Crossref! Os metadados estão em fila de validação e ativação."
-            : `A Crossref retornou o código HTTP ${response.status}. Verifique suas credenciais.`,
+          recordsDeposited: publishedPapers.length,
+          message: response.ok
+            ? "Depósito transmitido à Crossref. Os metadados estão em fila de validação."
+            : `A Crossref retornou HTTP ${response.status}. Verifique suas credenciais.`,
           crossrefResponse: responseText.slice(0, 500),
           xmlLength: xmlContent.length,
         });
-      } catch (err: any) {
-        return NextResponse.json({
-          success: false,
-          mode: "production",
-          message: `Falha na conexão com o servidor Crossref: ${err.message}`,
-        }, { status: 502 });
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : "Erro de rede";
+        return NextResponse.json(
+          {
+            success: false,
+            mode: "production",
+            message: `Falha na conexão com o servidor Crossref: ${msg}`,
+          },
+          { status: 502 }
+        );
       }
     }
 
-    // Modo Sandbox / Demonstração / Validação Estrutural
-    // Valida o XML localmente e simula a resposta oficial da Crossref Deposit API
     const submissionId = `CR-DEP-${new Date().getFullYear()}-${Math.floor(100000 + Math.random() * 900000)}`;
-    const batchId = `citeca2026_proceedings_${Date.now()}`;
+    const batchId = `ocw_sched_${schedConfId}_${Date.now()}`;
 
     return NextResponse.json({
       success: true,
-      mode: environment === "production" ? "demo_production" : "sandbox",
+      mode: "sandbox",
       submissionId,
       batchId,
-      recordsDeposited: 6,
+      recordsDeposited: publishedPapers.length,
       schema: "Crossref 4.4.2 (doi_batch)",
       status: "SUCCESSFUL_DEPOSIT",
-      message: "Lote de metadados XML validado com sucesso! Depósito estruturado pronto e transmitido para indexação de DOIs.",
+      message: "Lote de metadados XML validado em modo sandbox.",
       timestamp: new Date().toISOString(),
       xmlLength: xmlContent.length,
     });
-  } catch (error: any) {
-    return NextResponse.json({
-      success: false,
-      message: `Erro ao processar depósito: ${error.message}`,
-    }, { status: 500 });
+  } catch (error: unknown) {
+    const msg = error instanceof Error ? error.message : "Erro interno";
+    return NextResponse.json(
+      {
+        success: false,
+        message: `Erro ao processar depósito: ${msg}`,
+      },
+      { status: 500 }
+    );
   }
 }

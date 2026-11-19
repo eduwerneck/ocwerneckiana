@@ -1,34 +1,19 @@
 import Link from "next/link";
-import { getAllSubmissionsForDirector, getAllUsers, getEmailLogs, getSmtpSettings } from "@/lib/ocs-service";
-import { 
-  CheckSquare, 
-  Users, 
-  Clock, 
-  CheckCircle2, 
-  AlertCircle, 
-  BookOpen, 
-  ChevronRight,
-  ShieldAlert,
-  Send,
-  UserPlus
-} from "lucide-react";
+import { getAllSubmissionsForDirector, getAllUsers, getEmailLogs, getPublicSmtpSettings } from "@/lib/ocs-service";
+import { ADMIN_ROLES, requirePageAuth } from "@/lib/auth";
+import { BookOpen, ChevronRight } from "lucide-react";
 import DirectorActionsClient from "./DirectorActionsClient";
 
 export const dynamic = "force-dynamic";
 
-export default function DirectorDashboardPage() {
+export default async function DirectorDashboardPage() {
+  const sessionUser = await requirePageAuth(ADMIN_ROLES, "/dashboard/director");
+
   const submissions = getAllSubmissionsForDirector();
   const allUsers = getAllUsers();
   const reviewers = allUsers.filter((u) => u.role === "reviewer" || u.is_reviewer_candidate === 1);
   const emailLogs = getEmailLogs(50);
-  const rawSmtp = getSmtpSettings();
-  const smtpSettings = {
-    host: rawSmtp.host,
-    port: rawSmtp.port,
-    user: rawSmtp.user,
-    from: rawSmtp.from,
-    hasPass: rawSmtp.hasPass,
-  };
+  const smtpSettings = getPublicSmtpSettings();
 
   const total = submissions.length;
   const unassigned = submissions.filter((p) => p.status === "submitted").length;
@@ -50,12 +35,14 @@ export default function DirectorDashboardPage() {
         <div>
           <div className="flex items-center space-x-2">
             <span className="bg-purple-100 text-purple-800 text-[10px] font-bold px-2 py-0.5 rounded uppercase">
-              Papel: Administrador & Editor Geral
+              Papel: {sessionUser.role}
             </span>
-            <span className="text-xs text-slate-500">• Prof. Dr. Carlos Eduardo Dias (Unicamp)</span>
+            <span className="text-xs text-slate-500">
+              • {sessionUser.full_name}{sessionUser.affiliation ? ` (${sessionUser.affiliation})` : ""}
+            </span>
           </div>
           <h1 className="text-2xl font-black text-slate-900 tracking-tight mt-1">
-            Painel do Administrador (Gestão & Funções)
+            Painel do Administrador (Gestão &amp; Funções)
           </h1>
           <p className="text-xs text-slate-500 mt-0.5">
             Cadastro de novas conferências, atribuição de papéis aos usuários e coordenação editorial de pareceres.
@@ -101,11 +88,10 @@ export default function DirectorDashboardPage() {
         </div>
       </div>
 
-      {/* Tabela Interativa de Ações Editoriais, Criação de Conferência e Atribuição de Funções */}
-      <DirectorActionsClient 
-        submissions={submissions} 
-        reviewers={reviewers} 
-        allUsers={allUsers} 
+      <DirectorActionsClient
+        submissions={submissions}
+        reviewers={reviewers}
+        allUsers={allUsers}
         emailLogs={emailLogs}
         smtpSettings={smtpSettings}
       />

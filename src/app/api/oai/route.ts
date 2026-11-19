@@ -1,7 +1,20 @@
 import { NextRequest, NextResponse } from "next/server";
 import { generateOaiPmhResponse } from "@/lib/ocs-service";
+import { getAppBaseUrl } from "@/lib/security";
 
 export const dynamic = "force-dynamic";
+
+function buildOaiResponse(xml: string): NextResponse {
+  const hasError = xml.includes("<error ");
+  return new NextResponse(xml, {
+    status: 200,
+    headers: {
+      "Content-Type": "text/xml; charset=utf-8",
+      "Cache-Control": hasError ? "no-store" : "public, max-age=3600, s-maxage=3600",
+      "Access-Control-Allow-Origin": "*",
+    },
+  });
+}
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
@@ -13,22 +26,14 @@ export async function GET(req: NextRequest) {
   const set = searchParams.get("set") || undefined;
   const resumptionToken = searchParams.get("resumptionToken") || undefined;
 
-  const origin = req.nextUrl.origin || "http://localhost:3000";
-
+  const baseUrl = getAppBaseUrl(req.nextUrl.origin);
   const xml = generateOaiPmhResponse(
     verb,
     { identifier, metadataPrefix, from, until, set, resumptionToken },
-    origin
+    baseUrl
   );
 
-  return new NextResponse(xml, {
-    status: 200,
-    headers: {
-      "Content-Type": "text/xml; charset=utf-8",
-      "Cache-Control": "public, max-age=3600, s-maxage=3600",
-      "Access-Control-Allow-Origin": "*",
-    },
-  });
+  return buildOaiResponse(xml);
 }
 
 export async function POST(req: NextRequest) {
@@ -45,7 +50,7 @@ export async function POST(req: NextRequest) {
       bodyParams = await req.json();
     }
   } catch {
-    // Ignore parse error and fall back
+    // Ignorar erro de parse
   }
 
   const { searchParams } = new URL(req.url);
@@ -57,20 +62,12 @@ export async function POST(req: NextRequest) {
   const set = bodyParams.set || searchParams.get("set") || undefined;
   const resumptionToken = bodyParams.resumptionToken || searchParams.get("resumptionToken") || undefined;
 
-  const origin = req.nextUrl.origin || "http://localhost:3000";
-
+  const baseUrl = getAppBaseUrl(req.nextUrl.origin);
   const xml = generateOaiPmhResponse(
     verb,
     { identifier, metadataPrefix, from, until, set, resumptionToken },
-    origin
+    baseUrl
   );
 
-  return new NextResponse(xml, {
-    status: 200,
-    headers: {
-      "Content-Type": "text/xml; charset=utf-8",
-      "Cache-Control": "public, max-age=3600, s-maxage=3600",
-      "Access-Control-Allow-Origin": "*",
-    },
-  });
+  return buildOaiResponse(xml);
 }

@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { Paper, User, EmailLog, ReviewerMatch } from "@/lib/ocs-service";
 import { 
   assignReviewerAction, 
@@ -74,6 +75,8 @@ export default function DirectorActionsClient({
   emailLogs = [],
   smtpSettings
 }: Props) {
+  const router = useRouter();
+  const assignRequestIdRef = useRef(0);
   const [activeTab, setActiveTab] = useState<"submissions" | "users" | "interop" | "reports" | "emails">("submissions");
   const [selectedPaper, setSelectedPaper] = useState<Paper | null>(null);
   const [assignModalOpen, setAssignModalOpen] = useState(false);
@@ -141,12 +144,14 @@ export default function DirectorActionsClient({
   const [depositResult, setDepositResult] = useState<any | null>(null);
 
   const handleOpenAssign = async (paper: Paper) => {
+    const reqId = ++assignRequestIdRef.current;
     setSelectedPaper(paper);
     setAssignModalOpen(true);
     setMatchingLoading(true);
     setAutoAssignSuccess(null);
     try {
       const res = await getSuggestedReviewersAction(paper.id);
+      if (reqId !== assignRequestIdRef.current) return;
       if (res.success && res.matches) {
         setSuggestedMatches(res.matches);
         const topAvailable = res.matches.find(m => !m.isConflict);
@@ -157,7 +162,9 @@ export default function DirectorActionsClient({
     } catch (e) {
       console.error(e);
     } finally {
-      setMatchingLoading(false);
+      if (reqId === assignRequestIdRef.current) {
+        setMatchingLoading(false);
+      }
     }
   };
 
@@ -174,7 +181,7 @@ export default function DirectorActionsClient({
         setAutoAssignSuccess(`Atribuídos com sucesso: ${res.assigned.map(a => a.name).join(" e ")}`);
         setTimeout(() => {
           setAssignModalOpen(false);
-          window.location.reload();
+          router.refresh();
         }, 1200);
       } else {
         alert(res.error || "Não foi possível realizar a atribuição automática.");
@@ -207,7 +214,7 @@ export default function DirectorActionsClient({
             : "E-mail registrado com sucesso na Caixa de Saída (Auditoria). Em produção, configure as variáveis SMTP no .env.",
         });
         setTimeout(() => {
-          window.location.reload();
+          router.refresh();
         }, 2000);
       } else {
         setTestEmailResult({
@@ -286,7 +293,7 @@ export default function DirectorActionsClient({
 
     try {
       await markPaperPresentedAction(formData);
-      window.location.reload();
+      router.refresh();
     } catch (e) {
       console.error(e);
       alert("Erro ao atualizar status de apresentação.");
@@ -305,7 +312,7 @@ export default function DirectorActionsClient({
     try {
       await assignReviewerAction(formData);
       setAssignModalOpen(false);
-      window.location.reload();
+      router.refresh();
     } catch (e) {
       console.error(e);
       alert("Erro ao designar parecerista.");
@@ -328,7 +335,7 @@ export default function DirectorActionsClient({
     try {
       await recordDecisionAction(formData);
       setDecisionModalOpen(false);
-      window.location.reload();
+      router.refresh();
     } catch (e) {
       console.error(e);
       alert("Erro ao gravar decisão.");
@@ -366,7 +373,7 @@ export default function DirectorActionsClient({
         setConfSuccessMsg(`Conferência "${confTitle}" cadastrada com sucesso!`);
         setTimeout(() => {
           setCreateConfModalOpen(false);
-          window.location.reload();
+          router.refresh();
         }, 1200);
       }
     } catch (err) {
@@ -431,86 +438,95 @@ export default function DirectorActionsClient({
 
   return (
     <div className="space-y-6">
-      {/* Barra de Navegação de Abas do Administrador & Botão Nova Conferência */}
-      <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-        <div className="flex flex-wrap items-center gap-2">
+      {/* Barra de Navegação de Abas (rótulos curtos, scroll horizontal em mobile) + 1 CTA Primário */}
+      <div className="bg-white border border-slate-200 rounded-2xl p-3 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div role="tablist" aria-label="Seções do painel administrativo" className="flex items-center gap-1.5 overflow-x-auto pb-1 sm:pb-0">
           <button
             type="button"
+            role="tab"
+            aria-selected={activeTab === "submissions"}
             onClick={() => setActiveTab("submissions")}
-            className={`flex items-center space-x-2 px-4 py-2 rounded-xl text-xs font-bold transition cursor-pointer ${
+            className={`flex items-center space-x-1.5 px-3 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition cursor-pointer ${
               activeTab === "submissions"
                 ? "bg-purple-600 text-white shadow-xs"
-                : "bg-slate-50 text-slate-700 hover:bg-slate-100 border border-slate-200"
+                : "text-slate-700 hover:bg-slate-100"
             }`}
           >
-            <FileText className="w-4 h-4" />
-            <span>Fila Editorial ({submissions.length})</span>
+            <FileText className="w-3.5 h-3.5" />
+            <span>Submissões ({submissions.length})</span>
           </button>
 
           <button
             type="button"
+            role="tab"
+            aria-selected={activeTab === "users"}
             onClick={() => setActiveTab("users")}
-            className={`flex items-center space-x-2 px-4 py-2 rounded-xl text-xs font-bold transition cursor-pointer ${
+            className={`flex items-center space-x-1.5 px-3 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition cursor-pointer ${
               activeTab === "users"
                 ? "bg-purple-600 text-white shadow-xs"
-                : "bg-slate-50 text-slate-700 hover:bg-slate-100 border border-slate-200"
+                : "text-slate-700 hover:bg-slate-100"
             }`}
           >
-            <Users className="w-4 h-4" />
-            <span>Atribuição de Funções ({allUsers.length})</span>
+            <Users className="w-3.5 h-3.5" />
+            <span>Usuários ({allUsers.length})</span>
           </button>
 
           <button
             type="button"
+            role="tab"
+            aria-selected={activeTab === "interop"}
             onClick={() => setActiveTab("interop")}
-            className={`flex items-center space-x-2 px-4 py-2 rounded-xl text-xs font-bold transition cursor-pointer ${
+            className={`flex items-center space-x-1.5 px-3 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition cursor-pointer ${
               activeTab === "interop"
                 ? "bg-purple-600 text-white shadow-xs"
-                : "bg-slate-50 text-slate-700 hover:bg-slate-100 border border-slate-200"
+                : "text-slate-700 hover:bg-slate-100"
             }`}
           >
-            <Globe className="w-4 h-4" />
-            <span>Interoperabilidade & Depósito Crossref (Admin)</span>
+            <Globe className="w-3.5 h-3.5" />
+            <span>Crossref &amp; OAI</span>
           </button>
 
           <button
             type="button"
+            role="tab"
+            aria-selected={activeTab === "reports"}
             onClick={() => setActiveTab("reports")}
-            className={`flex items-center space-x-2 px-4 py-2 rounded-xl text-xs font-bold transition cursor-pointer ${
+            className={`flex items-center space-x-1.5 px-3 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition cursor-pointer ${
               activeTab === "reports"
                 ? "bg-purple-600 text-white shadow-xs"
-                : "bg-slate-50 text-slate-700 hover:bg-slate-100 border border-slate-200"
+                : "text-slate-700 hover:bg-slate-100"
             }`}
           >
-            <BarChart3 className="w-4 h-4" />
-            <span>Relatórios & Exportações</span>
+            <BarChart3 className="w-3.5 h-3.5" />
+            <span>Relatórios</span>
           </button>
 
           <button
             type="button"
+            role="tab"
+            aria-selected={activeTab === "emails"}
             onClick={() => setActiveTab("emails")}
-            className={`flex items-center space-x-2 px-4 py-2 rounded-xl text-xs font-bold transition cursor-pointer ${
+            className={`flex items-center space-x-1.5 px-3 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition cursor-pointer ${
               activeTab === "emails"
                 ? "bg-purple-600 text-white shadow-xs"
-                : "bg-slate-50 text-slate-700 hover:bg-slate-100 border border-slate-200"
+                : "text-slate-700 hover:bg-slate-100"
             }`}
           >
-            <Mail className="w-4 h-4" />
-            <span>Central de E-mails ({emailLogs.length})</span>
+            <Mail className="w-3.5 h-3.5" />
+            <span>E-mails ({emailLogs.length})</span>
           </button>
         </div>
 
-        {/* Botão de Destaque: Cadastrar Nova Conferência */}
         <button
           type="button"
           onClick={() => {
             setConfSuccessMsg(null);
             setCreateConfModalOpen(true);
           }}
-          className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-4 py-2 rounded-xl text-xs flex items-center space-x-1.5 shadow-xs transition cursor-pointer self-start sm:self-auto"
+          className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-3.5 py-2 rounded-xl text-xs flex items-center space-x-1.5 shadow-xs transition cursor-pointer shrink-0 self-start sm:self-auto"
         >
-          <Plus className="w-4 h-4" />
-          <span>+ Cadastrar Nova Conferência</span>
+          <Plus className="w-3.5 h-3.5" />
+          <span>Nova Conferência</span>
         </button>
       </div>
 
@@ -598,12 +614,12 @@ export default function DirectorActionsClient({
                         )}
                       </span>
 
-                      {/* Badge e Ação de Apresentação no Evento (Trava de Publicação) */}
+                      {/* Badge de Apresentação + 1 CTA Primário Contextual + Menu Secundário */}
                       <div className="flex items-center space-x-1.5">
                         {paper.is_presented === 1 ? (
                           <span className="inline-flex items-center space-x-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200">
                             <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-                            <span>Apresentado no Evento</span>
+                            <span>Apresentado</span>
                           </span>
                         ) : (
                           <span className="inline-flex items-center space-x-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-50 text-amber-800 border border-amber-200">
@@ -611,45 +627,73 @@ export default function DirectorActionsClient({
                             <span>Apresentação Pendente</span>
                           </span>
                         )}
-
-                        <button
-                          type="button"
-                          disabled={presentationLoadingId === paper.id}
-                          onClick={() => handleTogglePresentation(paper)}
-                          className={`px-2 py-0.5 rounded text-[10px] font-bold transition cursor-pointer border ${
-                            paper.is_presented === 1
-                              ? "bg-slate-100 hover:bg-red-50 hover:text-red-700 hover:border-red-200 text-slate-600 border-slate-200"
-                              : "bg-emerald-600 hover:bg-emerald-700 text-white border-emerald-600 shadow-2xs"
-                          }`}
-                          title={paper.is_presented === 1 ? "Clique para reverter ou registrar No-Show" : "Clique para confirmar que o autor apresentou o trabalho"}
-                        >
-                          {presentationLoadingId === paper.id ? (
-                            "Atualizando..."
-                          ) : paper.is_presented === 1 ? (
-                            "Registrar No-Show"
-                          ) : (
-                            "Atestar Presença"
-                          )}
-                        </button>
                       </div>
 
                       <div className="flex items-center space-x-2">
-                        <button
-                          type="button"
-                          onClick={() => handleOpenAssign(paper)}
-                          className="bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center space-x-1 transition shadow-2xs"
-                        >
-                          <UserPlus className="w-3.5 h-3.5 text-blue-600" />
-                          <span>Designar Revisor</span>
-                        </button>
+                        {/* 1 CTA primário contextual ao estágio do artigo */}
+                        {paper.status === "submitted" ? (
+                          <button
+                            type="button"
+                            onClick={() => handleOpenAssign(paper)}
+                            className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-lg text-xs font-bold flex items-center space-x-1.5 transition shadow-2xs cursor-pointer"
+                          >
+                            <UserPlus className="w-3.5 h-3.5" />
+                            <span>Designar Revisor</span>
+                          </button>
+                        ) : paper.status === "accepted" && paper.is_presented !== 1 ? (
+                          <button
+                            type="button"
+                            disabled={presentationLoadingId === paper.id}
+                            onClick={() => handleTogglePresentation(paper)}
+                            className="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded-lg text-xs font-bold flex items-center space-x-1.5 transition shadow-2xs cursor-pointer"
+                          >
+                            <CheckCircle2 className="w-3.5 h-3.5" />
+                            <span>{presentationLoadingId === paper.id ? "Atualizando..." : "Atestar Presença"}</span>
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => handleOpenDecision(paper)}
+                            className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-lg text-xs font-bold transition shadow-2xs cursor-pointer"
+                          >
+                            Gravar Decisão
+                          </button>
+                        )}
 
-                        <button
-                          type="button"
-                          onClick={() => handleOpenDecision(paper)}
-                          className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-lg text-xs font-bold transition shadow-2xs"
-                        >
-                          Gravar Decisão
-                        </button>
+                        {/* Menu secundário compacto */}
+                        <details className="relative">
+                          <summary className="list-none px-2.5 py-1.5 rounded-lg text-xs font-semibold text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 cursor-pointer select-none flex items-center space-x-1">
+                            <span>Ações</span>
+                            <ChevronDown className="w-3.5 h-3.5 text-slate-500" />
+                          </summary>
+                          <div className="absolute right-0 mt-1.5 w-48 bg-white border border-slate-200 rounded-xl shadow-lg py-1 z-30 text-xs">
+                            <button
+                              type="button"
+                              onClick={() => handleOpenAssign(paper)}
+                              className="w-full text-left px-3 py-2 hover:bg-slate-50 text-slate-700 font-medium cursor-pointer flex items-center space-x-2"
+                            >
+                              <UserPlus className="w-3.5 h-3.5 text-blue-600" />
+                              <span>Designar Revisor</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleOpenDecision(paper)}
+                              className="w-full text-left px-3 py-2 hover:bg-slate-50 text-slate-700 font-medium cursor-pointer flex items-center space-x-2"
+                            >
+                              <Check className="w-3.5 h-3.5 text-emerald-600" />
+                              <span>Gravar Decisão</span>
+                            </button>
+                            <button
+                              type="button"
+                              disabled={presentationLoadingId === paper.id}
+                              onClick={() => handleTogglePresentation(paper)}
+                              className="w-full text-left px-3 py-2 hover:bg-slate-50 text-slate-700 font-medium cursor-pointer flex items-center space-x-2"
+                            >
+                              <Clock className="w-3.5 h-3.5 text-amber-600" />
+                              <span>{paper.is_presented === 1 ? "Registrar No-Show" : "Atestar Presença"}</span>
+                            </button>
+                          </div>
+                        </details>
                       </div>
                     </div>
                   </div>
@@ -868,35 +912,43 @@ export default function DirectorActionsClient({
               </p>
             </div>
 
-            <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
               <button
                 type="button"
                 onClick={() => setDepositModalOpen(true)}
                 className="bg-purple-600 hover:bg-purple-700 text-white font-bold px-4 py-2.5 rounded-xl text-xs flex items-center space-x-2 shadow-xs transition cursor-pointer"
               >
                 <Send className="w-4 h-4" />
-                <span>Subir na API Crossref (1 Clique)</span>
+                <span>Depositar na Crossref</span>
               </button>
 
-              <a
-                href="/api/export/crossref?schedConfId=1"
-                target="_blank"
-                download="crossref_citeca2026_proceedings.xml"
-                className="bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 font-semibold px-3.5 py-2.5 rounded-xl text-xs flex items-center space-x-1.5 transition shadow-2xs"
-              >
-                <ExternalLink className="w-3.5 h-3.5 text-purple-600" />
-                <span>Baixar XML Crossref</span>
-              </a>
-
-              <a
-                href="/api/oai?verb=ListRecords&metadataPrefix=oai_dc"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 font-semibold px-3.5 py-2.5 rounded-xl text-xs flex items-center space-x-1.5 transition shadow-2xs"
-              >
-                <ExternalLink className="w-3.5 h-3.5 text-blue-600" />
-                <span>OAI-PMH (Dublin Core)</span>
-              </a>
+              <details className="relative">
+                <summary className="list-none bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 font-semibold px-3.5 py-2.5 rounded-xl text-xs flex items-center space-x-1.5 transition shadow-2xs cursor-pointer select-none">
+                  <Download className="w-3.5 h-3.5 text-purple-600" />
+                  <span>Exportar XML</span>
+                  <ChevronDown className="w-3.5 h-3.5 text-slate-500" />
+                </summary>
+                <div className="absolute right-0 mt-1.5 w-52 bg-white border border-slate-200 rounded-xl shadow-lg py-1 z-30 text-xs">
+                  <a
+                    href="/api/export/crossref?schedConfId=1"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center space-x-2 px-3 py-2 text-slate-700 hover:bg-slate-50 font-medium"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5 text-purple-600" />
+                    <span>Baixar XML Crossref</span>
+                  </a>
+                  <a
+                    href="/api/oai?verb=ListRecords&metadataPrefix=oai_dc"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center space-x-2 px-3 py-2 text-slate-700 hover:bg-slate-50 font-medium"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5 text-blue-600" />
+                    <span>OAI-PMH (Dublin Core)</span>
+                  </a>
+                </div>
+              </details>
             </div>
           </div>
         </div>
@@ -2191,11 +2243,13 @@ export default function DirectorActionsClient({
               </button>
             </div>
 
-            {/* Container do HTML do E-mail */}
-            <div className="max-h-[500px] overflow-y-auto bg-slate-50 p-4 rounded-2xl border border-slate-200">
-              <div
-                className="prose prose-sm max-w-none text-xs"
-                dangerouslySetInnerHTML={{ __html: viewingEmail.content_html }}
+            {/* Container isolado do HTML do E-mail (sandbox impede execução de scripts) */}
+            <div className="bg-slate-50 p-2 rounded-2xl border border-slate-200">
+              <iframe
+                sandbox=""
+                title="Prévia segura do e-mail"
+                srcDoc={viewingEmail.content_html}
+                className="w-full min-h-[420px] rounded-xl border-0 bg-white"
               />
             </div>
 

@@ -1,19 +1,22 @@
 import Link from "next/link";
-import { getRegistrations } from "@/lib/ocs-service";
-import { 
-  FileCheck, 
-  Users, 
-  ChevronRight, 
-  CheckCircle2, 
-  Calendar,
-  MapPin
-} from "lucide-react";
+import { getRegistrations, getActiveSchedConf } from "@/lib/ocs-service";
+import { parsePositiveInt } from "@/lib/validation";
+import { FileCheck, Users, ChevronRight, CheckCircle2 } from "lucide-react";
 import RegisterFormClient from "./RegisterFormClient";
 
 export const dynamic = "force-dynamic";
 
-export default function RegisterPage() {
-  const registrations = getRegistrations(1) as Array<{
+export default async function RegisterPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ schedConfId?: string }>;
+}) {
+  const resolved = await searchParams;
+  const requestedId = resolved?.schedConfId ? parsePositiveInt(resolved.schedConfId) ?? undefined : undefined;
+  const schedConf = getActiveSchedConf(requestedId);
+  const schedConfId = schedConf?.id ?? 1;
+
+  const registrations = (schedConf ? getRegistrations(schedConf.id) : []) as Array<{
     id: number;
     full_name: string;
     email: string;
@@ -24,14 +27,12 @@ export default function RegisterPage() {
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10 space-y-8">
-      {/* Breadcrumb */}
       <nav className="flex items-center space-x-2 text-xs text-slate-500">
         <Link href="/" className="hover:text-blue-700">Início</Link>
         <ChevronRight className="w-3.5 h-3.5" />
-        <span className="font-semibold text-slate-800">Inscrições & Credenciamento</span>
+        <span className="font-semibold text-slate-800">Inscrições &amp; Credenciamento</span>
       </nav>
 
-      {/* Cabeçalho */}
       <div className="bg-white border border-slate-200 rounded-xl p-8 shadow-xs space-y-3">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div className="space-y-1">
@@ -39,10 +40,10 @@ export default function RegisterPage() {
               Credenciamento Oficial de Participantes
             </span>
             <h1 className="text-3xl font-extrabold text-slate-900 tracking-tight">
-              Inscrições no X CITECA 2026
+              Inscrições — {schedConf?.title || "Conferência Científica"}
             </h1>
             <p className="text-xs text-slate-500">
-              Garanta seu certificado de participação, acesso às sessões orais e coffee breaks do congresso.
+              Garanta seu certificado de participação e acesso às sessões técnicas do evento.
             </p>
           </div>
 
@@ -54,7 +55,6 @@ export default function RegisterPage() {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-        {/* Formulário de Inscrição */}
         <div className="lg:col-span-7 bg-white border border-slate-200 rounded-xl p-6 shadow-xs space-y-4">
           <div className="border-b border-slate-100 pb-3">
             <h2 className="text-lg font-bold text-slate-900 flex items-center space-x-2">
@@ -64,17 +64,16 @@ export default function RegisterPage() {
             <p className="text-xs text-slate-500 mt-0.5">Preencha seus dados para emissão do credenciamento.</p>
           </div>
 
-          <RegisterFormClient />
+          <RegisterFormClient schedConfId={schedConfId} conferenceTitle={schedConf?.title || "Conferência"} />
         </div>
 
-        {/* Lista de Inscritos Confirmados */}
         <div className="lg:col-span-5 bg-white border border-slate-200 rounded-xl p-6 shadow-xs space-y-4">
           <div className="border-b border-slate-100 pb-3">
             <h3 className="text-base font-bold text-slate-900 flex items-center space-x-2">
               <Users className="w-4 h-4 text-blue-600" />
               <span>Participantes Credenciados</span>
             </h3>
-            <p className="text-xs text-slate-500">Credenciais geradas pelo sistema OCS.</p>
+            <p className="text-xs text-slate-500">Credenciais geradas pelo sistema OCW.</p>
           </div>
 
           <div className="divide-y divide-slate-100 max-h-[460px] overflow-y-auto pr-1">

@@ -329,9 +329,11 @@ export default function SubmitWizardPage() {
 
     try {
       const res = await submitPaperAction(formData);
-      if (res?.success) {
+      if (res?.success && typeof res.paperId === "number") {
         setProtocolId(res.paperId);
         setCurrentStep(6); // Step 6 = Tela de Sucesso
+      } else {
+        alert(res?.error || "Ocorreu um erro ao submeter o trabalho.");
       }
     } catch (err) {
       console.error(err);

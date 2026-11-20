@@ -54,6 +54,11 @@ export async function registerUserAction(formData: FormData): Promise<{ success:
   const email = parseNonEmptyString(formData.get("email"), 254)?.toLowerCase();
   const affiliation = parseOptionalString(formData.get("affiliation"), 200);
   const rorId = parseOptionalString(formData.get("ror_id"), 120);
+  const rawOrcid = parseOptionalString(formData.get("orcid"), 100);
+  const orcid = rawOrcid
+    .replace(/^https?:\/\/(sandbox\.)?orcid\.org\//i, "")
+    .trim()
+    .toUpperCase();
   const wantsReviewer = formData.get("wants_reviewer") === "true";
   const reviewInterests = parseOptionalString(formData.get("review_interests"), 1000);
   const academicTitle = parseOptionalString(formData.get("academic_title"), 150);
@@ -61,6 +66,9 @@ export async function registerUserAction(formData: FormData): Promise<{ success:
 
   if (!fullName || !email || !isValidEmail(email)) {
     return { success: false, error: "Informe nome completo e um e-mail válido." };
+  }
+  if (orcid && !/^\d{4}-\d{4}-\d{4}-\d{3}[\dX]$/.test(orcid)) {
+    return { success: false, error: "Formato de ORCID inválido. Use 0000-0000-0000-0000." };
   }
   if (!password || password.length < 8) {
     return { success: false, error: "A senha deve ter pelo menos 8 caracteres." };
@@ -80,16 +88,17 @@ export async function registerUserAction(formData: FormData): Promise<{ success:
   try {
     const res = db.prepare(`
       INSERT INTO users (
-        username, email, full_name, affiliation, ror_id, academic_title,
+        username, email, full_name, affiliation, ror_id, orcid, academic_title,
         role, bio, password_hash, is_reviewer_candidate, reviewer_status, review_interests, auth_provider
       )
-      VALUES (?, ?, ?, ?, ?, ?, 'author', '', ?, ?, ?, ?, 'local')
+      VALUES (?, ?, ?, ?, ?, ?, ?, 'author', '', ?, ?, ?, ?, 'local')
     `).run(
       username,
       email,
       fullName,
       affiliation,
       rorId || null,
+      orcid || null,
       wantsReviewer ? academicTitle || null : null,
       passwordHash,
       wantsReviewer ? 1 : 0,

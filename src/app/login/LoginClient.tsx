@@ -44,6 +44,7 @@ export default function LoginClient({
   const [email, setEmail] = useState("");
   const [affiliation, setAffiliation] = useState("");
   const [rorId, setRorId] = useState("");
+  const [orcid, setOrcid] = useState("");
   const [wantsReviewer, setWantsReviewer] = useState(false);
   const [reviewInterests, setReviewInterests] = useState("");
   const [academicTitle, setAcademicTitle] = useState("");
@@ -98,6 +99,7 @@ export default function LoginClient({
       formData.append("email", email.trim());
       formData.append("affiliation", affiliation.trim());
       formData.append("ror_id", rorId.trim());
+      formData.append("orcid", orcid.trim());
       formData.append("wants_reviewer", wantsReviewer ? "true" : "false");
       formData.append("review_interests", reviewInterests.trim());
       formData.append("academic_title", academicTitle.trim());
@@ -287,7 +289,7 @@ export default function LoginClient({
 
             <div>
               <label htmlFor="reg-email" className="text-xs font-bold text-slate-700 block mb-1">
-                E-mail Institucional *
+                E-mail *
               </label>
               <div className="relative">
                 <Mail className="w-4 h-4 absolute left-3 top-3 text-slate-400" />
@@ -297,7 +299,7 @@ export default function LoginClient({
                   required
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  placeholder="pesquisador@universidade.edu.br"
+                  placeholder="seu.nome@email.com"
                   className="w-full pl-9 pr-3 py-2.5 border border-slate-300 rounded-xl text-xs bg-slate-50/50 focus:bg-white focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
                 />
               </div>
@@ -313,6 +315,38 @@ export default function LoginClient({
                 setRorId(nextRor);
               }}
             />
+
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <label htmlFor="reg-orcid" className="text-xs font-bold text-slate-700">
+                  ORCID iD <span className="font-normal text-slate-400">(opcional)</span>
+                </label>
+                <a
+                  href="https://orcid.org/register"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-[11px] text-emerald-700 hover:underline font-medium"
+                >
+                  Não tem ORCID? Criar gratuitamente ↗
+                </a>
+              </div>
+              <div className="relative">
+                <span
+                  aria-hidden="true"
+                  className="w-5 h-5 rounded-full bg-[#A6CE39] text-white font-black text-[10px] flex items-center justify-center absolute left-2.5 top-2.5"
+                >
+                  iD
+                </span>
+                <input
+                  id="reg-orcid"
+                  type="text"
+                  value={orcid}
+                  onChange={(e) => setOrcid(e.target.value)}
+                  placeholder="0000-0002-1825-0097"
+                  className="w-full pl-9 pr-3 py-2.5 border border-slate-300 rounded-xl text-xs font-mono bg-slate-50/50 focus:bg-white focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
+                />
+              </div>
+            </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>

@@ -17,9 +17,10 @@ import {
   updateUserReviewerProfile,
   getPaperOwnerId,
   getReviewAssignmentOwner,
+  getUserById,
 } from "@/lib/ocs-service";
 import { testSmtpConnection } from "@/lib/email-service";
-import { ADMIN_ROLES, requireActionAuth } from "@/lib/auth";
+import { ADMIN_ROLES, getSessionUser, requireActionAuth } from "@/lib/auth";
 import {
   isValidDecision,
   isValidEmail,
@@ -111,12 +112,13 @@ export async function submitPaperAction(formData: FormData) {
     .filter((a) => a.full_name.length > 0);
 
   if (authors.length === 0) {
+    const fullUser = getUserById(auth.user.id);
     authors.push({
-      full_name: auth.user.full_name,
-      email: auth.user.email,
-      affiliation: auth.user.affiliation || "",
-      orcid: "",
-      ror_id: "",
+      full_name: fullUser?.full_name || auth.user.full_name,
+      email: fullUser?.email || auth.user.email,
+      affiliation: fullUser?.affiliation || auth.user.affiliation || "",
+      orcid: fullUser?.orcid || "",
+      ror_id: fullUser?.ror_id || "",
       credit_roles: "Conceitualização, Metodologia, Escrita – rascunho original",
       is_primary: true,
     });
@@ -494,6 +496,26 @@ export async function updateUserReviewerProfileAction(formData: FormData) {
   revalidatePath("/dashboard/user");
   revalidatePath("/dashboard/director");
   return { success: true };
+}
+
+// 15. Retorna dados de identificação do usuário autenticado para pré-preencher autoria na submissão
+export async function getCurrentUserAuthorProfileAction(): Promise<{
+  full_name: string;
+  email: string;
+  affiliation: string;
+  orcid: string;
+  ror_id: string;
+} | null> {
+  const sessionUser = await getSessionUser();
+  if (!sessionUser) return null;
+  const fullUser = getUserById(sessionUser.id);
+  return {
+    full_name: fullUser?.full_name || sessionUser.full_name || "",
+    email: fullUser?.email || sessionUser.email || "",
+    affiliation: fullUser?.affiliation || sessionUser.affiliation || "",
+    orcid: fullUser?.orcid || "",
+    ror_id: fullUser?.ror_id || "",
+  };
 }
 
 // 14. Configuração SMTP é exclusivamente via variáveis de ambiente (nunca grava senha no banco)

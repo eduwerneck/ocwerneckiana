@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { 
@@ -27,7 +27,7 @@ import {
   Info,
   Scale
 } from "lucide-react";
-import { submitPaperAction } from "@/app/actions";
+import { getCurrentUserAuthorProfileAction, submitPaperAction } from "@/app/actions";
 import { convertReferencesList, countWords, calculateEstimatedPages } from "@/lib/references";
 
 interface CoAuthor {
@@ -124,15 +124,46 @@ export default function SubmitWizardPage() {
   const [funding, setFunding] = useState("");
   const [authors, setAuthors] = useState<CoAuthor[]>([
     {
-      full_name: "Dr. Lucas Martins",
-      email: "autor@unesp.br",
-      affiliation: "Universidade Estadual Paulista (UNESP)",
-      orcid: "0000-0002-1825-0097",
-      ror_id: "https://ror.org/01y9bpm73",
+      full_name: "",
+      email: "",
+      affiliation: "",
+      orcid: "",
+      ror_id: "",
       credit_roles: "Conceitualização, Metodologia, Escrita – rascunho original",
       is_primary: true,
     },
   ]);
+
+  // Pré-preenche automaticamente o 1º autor com os dados do usuário autenticado (Nome, E-mail, Instituição, ROR, ORCID)
+  useEffect(() => {
+    let active = true;
+    getCurrentUserAuthorProfileAction()
+      .then((profile) => {
+        if (!active || !profile) return;
+        setAuthors((prev) => {
+          if (prev.length === 0) return prev;
+          const first = prev[0];
+          if (first.full_name || first.email) return prev;
+          return [
+            {
+              ...first,
+              full_name: profile.full_name,
+              email: profile.email,
+              affiliation: profile.affiliation,
+              orcid: profile.orcid,
+              ror_id: profile.ror_id,
+            },
+            ...prev.slice(1),
+          ];
+        });
+      })
+      .catch(() => {
+        // Sem sessão ativa: autor pode preencher manualmente
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   // Step 3 (Continuação): Referências Bibliográficas & Mini-Agente
   const [referencesText, setReferencesText] = useState("");

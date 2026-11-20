@@ -26,7 +26,8 @@ import {
   Info,
   RefreshCw,
   Barcode,
-  Printer
+  Printer,
+  Mail
 } from "lucide-react";
 import DownloadButton from "@/components/DownloadButton";
 import StructuredTextRenderer from "@/components/StructuredTextRenderer";
@@ -253,7 +254,7 @@ DOI: ${paper.doi ? `https://doi.org/${paper.doi}` : "Em processo de indexação 
             )}
           </div>
 
-          {/* Lista de Autores com ORCID, ROR e CRediT */}
+          {/* Lista de Autores com Nome Completo, E-mail, ORCID, ROR e CRediT */}
           <div className="pt-4 border-t border-slate-100 space-y-3">
             <span className="text-xs font-bold uppercase tracking-wider text-slate-500 block">
               {t("authors")}
@@ -262,13 +263,24 @@ DOI: ${paper.doi ? `https://doi.org/${paper.doi}` : "Em processo de indexação 
               {paper.authors?.map((author, index) => (
                 <div key={index} className="bg-slate-50/80 border border-slate-200 rounded-lg p-3.5 space-y-2">
                   <div className="flex items-start justify-between gap-2">
-                    <div>
+                    <div className="min-w-0">
                       <h4 className="font-bold text-slate-900 text-sm leading-tight">
                         {author.full_name}
                       </h4>
-                      <p className="text-xs text-slate-600 mt-0.5">
-                        {author.affiliation}
-                      </p>
+                      {author.affiliation && (
+                        <p className="text-xs text-slate-600 mt-0.5">
+                          {author.affiliation}
+                        </p>
+                      )}
+                      {author.email && (
+                        <a
+                          href={`mailto:${author.email}`}
+                          className="inline-flex items-center space-x-1 text-xs text-slate-600 hover:text-blue-700 mt-1 break-all"
+                        >
+                          <Mail className="w-3 h-3 text-slate-400 shrink-0" />
+                          <span>{author.email}</span>
+                        </a>
+                      )}
                     </div>
 
                     {/* Badge ROR Institucional */}
@@ -281,7 +293,7 @@ DOI: ${paper.doi ? `https://doi.org/${paper.doi}` : "Em processo de indexação 
                         title={`ROR ID: ${author.ror_id}`}
                       >
                         <Building2 className="w-3 h-3 text-blue-600" />
-                        <span>ROR ID</span>
+                        <span>ROR: {author.ror_id.replace(/^https?:\/\/ror\.org\//, "")}</span>
                         <ExternalLink className="w-2.5 h-2.5" />
                       </a>
                     )}

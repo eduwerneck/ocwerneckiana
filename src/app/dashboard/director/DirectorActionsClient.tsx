@@ -1027,7 +1027,7 @@ export default function DirectorActionsClient({
                       )}
                     </div>
 
-                    <div className="flex items-center gap-2 shrink-0">
+                    <div className="flex flex-wrap items-center gap-2 shrink-0">
                       <a
                         href={`/conference/${conf.slug}`}
                         target="_blank"
@@ -1038,14 +1038,24 @@ export default function DirectorActionsClient({
                         <span>Ver Página</span>
                       </a>
                       {ed && (
-                        <button
-                          type="button"
-                          onClick={() => handleOpenEditEvent(conf)}
-                          className="bg-purple-600 hover:bg-purple-700 text-white font-bold px-3.5 py-2 rounded-lg text-xs inline-flex items-center space-x-1.5 transition cursor-pointer"
-                        >
-                          <Pencil className="w-3.5 h-3.5" />
-                          <span>Editar Evento</span>
-                        </button>
+                        <>
+                          <a
+                            href={`/api/export/proceedings-archive?schedConfId=${ed.id}`}
+                            className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-3 py-2 rounded-lg text-xs inline-flex items-center space-x-1.5 transition"
+                            title="Baixar pacote HTML/CSS/JS 100% estático dos Anais para preservação permanente (GitHub Pages, servidor institucional ou Zenodo)"
+                          >
+                            <Download className="w-3.5 h-3.5" />
+                            <span>Baixar Anais (.zip)</span>
+                          </a>
+                          <button
+                            type="button"
+                            onClick={() => handleOpenEditEvent(conf)}
+                            className="bg-purple-600 hover:bg-purple-700 text-white font-bold px-3.5 py-2 rounded-lg text-xs inline-flex items-center space-x-1.5 transition cursor-pointer"
+                          >
+                            <Pencil className="w-3.5 h-3.5" />
+                            <span>Editar Evento</span>
+                          </button>
+                        </>
                       )}
                     </div>
                   </div>

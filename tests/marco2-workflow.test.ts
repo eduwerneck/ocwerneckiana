@@ -20,6 +20,7 @@ const {
   searchRegisteredUsers,
   getRegisteredUsersByIds,
 } = await import("../src/lib/ocs-service.ts");
+const { buildStaticProceedingsArchive } = await import("../src/lib/proceedings-archive.ts");
 
 seedDatabaseIfEmpty({ force: true });
 
@@ -264,5 +265,19 @@ describe("Entrega A/B — Schema v2 (ROR/OAuth), Aprovação de Avaliador e Trav
     assert.equal(updatedSched?.city, "Belo Horizonte, MG");
     assert.equal(updatedSched?.isbn, "978-65-99999-99-9");
     assert.equal(updatedSched?.proceedings_doi, "10.5281/zenodo.999");
+  });
+
+  it("buildStaticProceedingsArchive gera ZIP estático válido com index, artigos, Crossref XML e JSON", () => {
+    const archive = buildStaticProceedingsArchive(1);
+    assert.equal(archive.filename.endsWith(".zip"), true);
+    assert.equal(archive.paperCount >= 2, true);
+    // Assinatura PK\x03\x04 no cabeçalho do ZIP
+    assert.equal(archive.zipBuffer.readUInt32LE(0), 0x04034b50);
+    assert.equal(archive.entries.includes("index.html"), true);
+    assert.equal(archive.entries.includes("artigos/artigo-1.html"), true);
+    assert.equal(archive.entries.includes("artigos/artigo-6.html"), true);
+    assert.equal(archive.entries.includes("metadados/crossref.xml"), true);
+    assert.equal(archive.entries.includes("metadados/anais.json"), true);
+    assert.equal(archive.entries.includes("README.txt"), true);
   });
 });

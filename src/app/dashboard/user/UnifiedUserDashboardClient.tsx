@@ -152,7 +152,7 @@ export default function UnifiedUserDashboardClient({
                     href="/dashboard/director"
                     className="bg-purple-600 hover:bg-purple-700 text-white text-[10px] font-bold px-2 py-0.5 rounded font-mono transition"
                   >
-                    Ir para Modo Admin →
+                    Ir para Painel do Coordenador →
                   </Link>
                 )}
               </div>

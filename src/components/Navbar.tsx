@@ -111,14 +111,14 @@ export default function Navbar({ sessionUser = null }: Props) {
               </select>
             </div>
 
-            {/* Menu único de Conta (Entrar ou Dropdown autenticado) */}
+            {/* Menu único de Conta (Entrar / Cadastrar ou Dropdown autenticado) */}
             {!sessionUser ? (
               <Link
                 href="/login"
                 className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 transition shrink-0 ml-1"
               >
                 <LogIn className="w-3.5 h-3.5 shrink-0" />
-                <span>Entrar</span>
+                <span>Entrar / Cadastrar</span>
               </Link>
             ) : (
               <details className="relative ml-1 group">
@@ -126,7 +126,7 @@ export default function Navbar({ sessionUser = null }: Props) {
                   <UserCheck className="w-3.5 h-3.5 text-blue-700 shrink-0" />
                   <span className="max-w-[120px] truncate">{sessionUser.full_name}</span>
                   <span className={`hidden xl:inline-block text-[10px] font-bold px-2 py-0.5 rounded-full border ${roleBadgeClass}`}>
-                    {inAdminArea ? "Modo Admin" : roleLabel}
+                    {inAdminArea ? "Modo Coordenador" : roleLabel}
                   </span>
                   <ChevronDown className="w-3.5 h-3.5 text-slate-500 shrink-0" />
                 </summary>
@@ -151,7 +151,7 @@ export default function Navbar({ sessionUser = null }: Props) {
                       className="flex items-center space-x-2 px-3 py-2 text-xs font-semibold text-purple-700 hover:bg-purple-50"
                     >
                       <ShieldCheck className="w-3.5 h-3.5 text-purple-600" />
-                      <span>Modo Administrador (Editor)</span>
+                      <span>Painel do Coordenador</span>
                     </Link>
                   )}
                   <div className="border-t border-slate-100 mt-1 pt-1">
@@ -250,7 +250,7 @@ export default function Navbar({ sessionUser = null }: Props) {
                     onClick={() => setMobileMenuOpen(false)}
                     className="block px-3 py-2 rounded-lg text-sm font-bold text-purple-700 bg-purple-50 border border-purple-200"
                   >
-                    Painel do Administrador
+                    Painel do Coordenador
                   </Link>
                 )}
                 <form action={logoutAction}>

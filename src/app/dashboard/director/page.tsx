@@ -28,7 +28,7 @@ export default async function DirectorDashboardPage() {
       <nav className="flex items-center space-x-2 text-xs text-slate-500">
         <Link href="/" className="hover:text-blue-700">Início</Link>
         <ChevronRight className="w-3.5 h-3.5" />
-        <span className="font-semibold text-slate-800">Painel do Administrador Geral</span>
+        <span className="font-semibold text-slate-800">Painel do Coordenador</span>
       </nav>
 
       {/* Cabeçalho */}
@@ -43,7 +43,7 @@ export default async function DirectorDashboardPage() {
             </span>
           </div>
           <h1 className="text-2xl font-black text-slate-900 tracking-tight mt-1">
-            Painel do Administrador (Gestão &amp; Funções)
+            Painel do Coordenador (Gestão &amp; Funções)
           </h1>
           <p className="text-xs text-slate-500 mt-0.5">
             Cadastro de novas conferências, atribuição de papéis aos usuários e coordenação editorial de pareceres.

@@ -992,7 +992,7 @@ export default function DirectorActionsClient({
                             : "bg-emerald-100 text-emerald-800 border border-emerald-200"
                         }`}>
                           {currentRole === "admin" || currentRole === "director" || currentRole === "manager"
-                            ? "Administrador (Editor)"
+                            ? "Coordenador"
                             : currentRole === "reviewer"
                             ? "Avaliador"
                             : "Autor"}
@@ -1018,8 +1018,8 @@ export default function DirectorActionsClient({
                         >
                           <option value="author">Autor</option>
                           <option value="reviewer">Avaliador</option>
-                          <option value="director">Editor / Direção</option>
-                          <option value="admin">Administrador</option>
+                          <option value="director">Coordenador</option>
+                          <option value="admin">Coordenador Geral</option>
                         </select>
                       </td>
                     </tr>

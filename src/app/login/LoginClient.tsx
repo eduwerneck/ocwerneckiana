@@ -430,9 +430,9 @@ export default function LoginClient({
               >
                 <div className="flex items-center space-x-1 text-xs font-bold">
                   <ShieldCheck className="w-3.5 h-3.5 text-purple-600" />
-                  <span>Administrador</span>
+                  <span>Coordenador</span>
                 </div>
-                <span className="text-[10px] text-purple-700 block mt-0.5">Editor / Gestão</span>
+                <span className="text-[10px] text-purple-700 block mt-0.5">Gestão do Evento</span>
               </button>
 
               <button

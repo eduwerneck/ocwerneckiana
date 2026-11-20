@@ -6,12 +6,8 @@ import {
   Clock, 
   BookOpen, 
   Send, 
-  CheckCircle2, 
-  ShieldCheck, 
-  Users, 
   ArrowRight,
   Sparkles,
-  FileText,
   Barcode
 } from "lucide-react";
 
@@ -53,80 +49,6 @@ export default function HomePage() {
               <BookOpen className="w-4 h-4 text-blue-400" />
               <span>Consultar Anais (Acesso Aberto)</span>
             </Link>
-            <Link
-              href="/login"
-              className="bg-emerald-700 hover:bg-emerald-600 text-white font-medium px-5 py-2.5 rounded-lg transition flex items-center space-x-2 text-sm shadow-sm"
-            >
-              <Users className="w-4 h-4 text-emerald-200" />
-              <span>Acessar com ORCID / Entrar</span>
-            </Link>
-          </div>
-        </div>
-      </section>
-
-      {/* Seção dos Portais de Acesso (Dois Grandes Ambientes) */}
-      <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-          {/* Card Painel do Administrador */}
-          <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-xs hover:border-blue-300 transition flex flex-col justify-between">
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <span className="bg-purple-100 text-purple-800 text-xs font-bold px-2.5 py-0.5 rounded uppercase tracking-wider">
-                  Gestão & Interoperabilidade
-                </span>
-                <span className="text-xs text-slate-500 font-medium">Acesso Restrito ao Editor</span>
-              </div>
-              <h2 className="text-lg font-bold text-slate-900 flex items-center space-x-2">
-                <ShieldCheck className="w-5 h-5 text-purple-600" />
-                <span>Painel do Administrador (Diretor)</span>
-              </h2>
-              <p className="text-xs text-slate-600 leading-relaxed">
-                Ambiente exclusivo para cadastro de novas conferências, designação de papéis a usuários e depósito em lote dos Anais na API Crossref com atribuição de ORCID do Editor.
-              </p>
-            </div>
-            <div className="pt-4 flex items-center justify-between">
-              <Link
-                href="/dashboard/director"
-                className="inline-flex items-center space-x-1.5 text-xs font-semibold text-purple-700 hover:text-purple-900 bg-purple-50 hover:bg-purple-100 px-3.5 py-2 rounded-md transition"
-              >
-                <span>Acessar Painel do Administrador</span>
-                <ArrowRight className="w-3.5 h-3.5" />
-              </Link>
-            </div>
-          </div>
-
-          {/* Card Meu Painel (Autor & Avaliador) */}
-          <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-xs hover:border-blue-300 transition flex flex-col justify-between">
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <span className="bg-emerald-100 text-emerald-800 text-xs font-bold px-2.5 py-0.5 rounded uppercase tracking-wider">
-                  Espaço Unificado do Usuário
-                </span>
-                <span className="text-xs text-emerald-700 font-medium">Preenchimento via ORCID</span>
-              </div>
-              <h2 className="text-lg font-bold text-slate-900 flex items-center space-x-2">
-                <Users className="w-5 h-5 text-emerald-600" />
-                <span>Meu Painel (Autor & Avaliador)</span>
-              </h2>
-              <p className="text-xs text-slate-600 leading-relaxed">
-                Submeta artigos curtos em HTML com contagem de palavras e upload de figuras em 300 DPI, acompanhe o status da avaliação ou emita pareceres duplo-cegos atribuídos.
-              </p>
-            </div>
-            <div className="pt-4 flex items-center justify-between">
-              <Link
-                href="/dashboard/user"
-                className="inline-flex items-center space-x-1.5 text-xs font-semibold text-emerald-700 hover:text-emerald-900 bg-emerald-50 hover:bg-emerald-100 px-3.5 py-2 rounded-md transition"
-              >
-                <span>Acessar Meu Painel Unificado</span>
-                <ArrowRight className="w-3.5 h-3.5" />
-              </Link>
-              <Link
-                href="/conference/citeca/submit"
-                className="text-xs font-semibold text-blue-700 hover:underline"
-              >
-                + Submeter Artigo
-              </Link>
-            </div>
           </div>
         </div>
       </section>

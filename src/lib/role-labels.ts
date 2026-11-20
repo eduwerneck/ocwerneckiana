@@ -7,7 +7,7 @@ export function formatRoleLabel(role?: string | null): string {
     case "admin":
     case "manager":
     case "director":
-      return "Administrador (Editor)";
+      return "Coordenador";
     case "reviewer":
       return "Avaliador";
     case "author":

@@ -353,7 +353,7 @@ export function buildStaticProceedingsArchive(schedConfId: number): {
   }
 
   const papers = getPublishedProceedings(sched.id);
-  const crossrefXml = generateCrossrefXml(sched.id);
+  const crossrefXml = generateCrossrefXml({ schedConfId: sched.id });
   const safeSlug = (sched.slug || `edicao-${sched.id}`).replace(/[^a-z0-9_-]/gi, "-").toLowerCase();
 
   const entries: ZipEntryInput[] = [

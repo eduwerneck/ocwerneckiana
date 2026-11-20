@@ -550,16 +550,35 @@ export function seedDatabaseIfEmpty(options?: { force?: boolean }): boolean {
       "2025-06-12 11:30:00", 1, "2025-10-15 10:00:00", "Coordenador da Sessão", null, "abnt", null, null, null, null, 1, 5
     );
 
+    insertPaper.run(
+      1, 3, 6,
+      "Identificadores Persistentes (ORCID e ROR) na Qualificação de Metadados de Anais Científicos Brasileiros",
+      "Este artigo analisa o impacto da adoção conjunta dos identificadores persistentes ORCID iD e ROR (Research Organization Registry) na desambiguação autoral e institucional de anais eletrônicos de conferências acadêmicas.",
+      "ORCID, ROR, Metadados Científicos, Anais Eletrônicos, Interoperabilidade",
+      "oral", "published", "10.22456/citeca.2026.06", "978-65-89123-45-6",
+      "CNPq (Bolsa de Produtividade em Pesquisa — Processo nº 309412/2025-8).",
+      "artigo_identificadores_orcid_ror.pdf", 392400, "Submissão de autoria individual para a Trilha 3.",
+      "2026-07-18 11:40:00", 1, "2026-11-11 14:30:00", "Coordenador da Sessão",
+      "HAAK, L. L. et al. ORCID: a system to uniquely identify researchers. Learned Publishing, v. 25, n. 4, p. 259-264, 2012. DOI: https://doi.org/10.1087/20120404.\nLAMMERT, R.; MEADOWS, A. Research Organization Registry (ROR): Building an open infrastructure for institutional identifiers. Insights, v. 36, p. 1-9, 2023. DOI: https://doi.org/10.1629/uksg.612.",
+      "abnt",
+      "A inconsistência na grafia de nomes de autores e instituições constitui um dos principais gargalos para a recuperação de informação científica em anais de eventos acadêmicos no Brasil. Quando o registro de filiação depende exclusivamente de texto livre, multiplicam-se variantes nominais que fragmentam indicadores institucionais.",
+      "Realizou-se um estudo aplicado em plataforma de gestão de conferências baseada em web pura, integrando a API pública do Research Organization Registry (ROR v2) no formulário de cadastro e exigindo a vinculação de contas previamente registradas no momento da submissão.",
+      "A validação em 120 registros simulados eliminou 100% das divergências de sigla institucional e reduziu em 84% o tempo de conferência editorial antes do depósito de metadados XML na Crossref e da exposição via protocolo OAI-PMH 2.0.",
+      "A combinação entre cadastro único validado por ROR e ORCID iD e exposição estruturada nos anais garante rastreabilidade integral da produção em eventos, beneficiando autores, coordenadores e bases indexadoras.",
+      6, 10
+    );
+
     const insertPaperAuthor = db.prepare(`
       INSERT INTO paper_authors (paper_id, full_name, email, affiliation, orcid, ror_id, credit_roles, is_primary, seq)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
-    insertPaperAuthor.run(1, "Dr. Lucas Martins", "autor@unesp.br", "Universidade Estadual Paulista (UNESP)", "0000-0002-1825-0097", "https://ror.org/01y9bpm73", "Conceitualização, Metodologia", 1, 1);
-    insertPaperAuthor.run(1, "Camila Rocha", "coautor@usp.br", "Universidade de São Paulo (USP)", "0000-0003-4567-8901", "https://ror.org/04xfq0f34", "Curadoria de dados, Revisão", 0, 2);
+    insertPaperAuthor.run(1, "Dr. Lucas Martins", "autor@unesp.br", "Universidade Estadual Paulista (UNESP)", "0000-0002-1825-0097", "https://ror.org/01y9bpm73", "Conceitualização, Metodologia, Escrita – rascunho original", 1, 1);
+    insertPaperAuthor.run(1, "Camila Rocha", "coautor@usp.br", "Universidade de São Paulo (USP)", "0000-0003-4567-8901", "https://ror.org/04xfq0f34", "Curadoria de dados, Análise formal, Escrita – revisão e edição", 0, 2);
     insertPaperAuthor.run(2, "Dr. Lucas Martins", "autor@unesp.br", "Universidade Estadual Paulista (UNESP)", "0000-0002-1825-0097", "https://ror.org/01y9bpm73", "Conceitualização, Metodologia", 1, 1);
     insertPaperAuthor.run(3, "Dr. Lucas Martins", "autor@unesp.br", "Universidade Estadual Paulista (UNESP)", "0000-0002-1825-0097", "https://ror.org/01y9bpm73", "Conceitualização, Redação", 1, 1);
     insertPaperAuthor.run(4, "Dr. Lucas Martins", "autor@unesp.br", "Universidade Estadual Paulista (UNESP)", "0000-0002-1825-0097", "https://ror.org/01y9bpm73", "Investigação, Metodologia", 1, 1);
     insertPaperAuthor.run(5, "Dr. Lucas Martins", "autor@unesp.br", "Universidade Estadual Paulista (UNESP)", "0000-0002-1825-0097", "https://ror.org/01y9bpm73", "Conceitualização", 1, 1);
+    insertPaperAuthor.run(6, "Dr. Lucas Martins", "autor@unesp.br", "Universidade Estadual Paulista (UNESP)", "0000-0002-1825-0097", "https://ror.org/01y9bpm73", "Conceitualização, Metodologia, Investigação, Escrita – rascunho original", 1, 1);
 
     const insertReview = db.prepare(`
       INSERT INTO review_assignments (paper_id, reviewer_id, status, recommendation, score_originality, score_methodology, score_clarity, score_relevance, comments_author, comments_director, date_assigned, date_completed)

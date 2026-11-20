@@ -11,6 +11,7 @@ import {
   registerAttendee,
   createConference,
   updateUserRole,
+  approveReviewerCandidate,
   getSuggestedReviewersForPaper,
   autoAssignBestReviewersForPaper,
   updateUserReviewerProfile,
@@ -365,7 +366,7 @@ export async function createConferenceAction(formData: FormData) {
   }
 }
 
-// 9. Diretor altera papel de usuário (restrito a ADMIN_ROLES; revoga sessões do usuário)
+// 9. Diretor altera papel de usuário (restrito a ADMIN_ROLES; protege último admin e revoga sessões)
 export async function updateUserRoleAction(formData: FormData) {
   const auth = await requireActionAuth(ADMIN_ROLES);
   if (!auth.ok) return { success: false, error: auth.error };
@@ -377,7 +378,34 @@ export async function updateUserRoleAction(formData: FormData) {
     return { success: false, error: "Usuário e papel válido são obrigatórios." };
   }
 
-  updateUserRole(userId, role);
+  try {
+    updateUserRole(userId, role);
+  } catch (err: unknown) {
+    return { success: false, error: err instanceof Error ? err.message : "Não foi possível atualizar papel." };
+  }
+
+  revalidatePath("/dashboard/director");
+  revalidatePath("/dashboard/user");
+  return { success: true };
+}
+
+// 9b. Diretor aprova ou recusa candidatura a avaliador (restrito a ADMIN_ROLES)
+export async function approveReviewerCandidateAction(formData: FormData) {
+  const auth = await requireActionAuth(ADMIN_ROLES);
+  if (!auth.ok) return { success: false, error: auth.error };
+
+  const userId = parsePositiveInt(formData.get("user_id"));
+  const approve = formData.get("approve") === "true";
+
+  if (!userId) {
+    return { success: false, error: "Usuário inválido." };
+  }
+
+  try {
+    approveReviewerCandidate(userId, approve);
+  } catch (err: unknown) {
+    return { success: false, error: err instanceof Error ? err.message : "Erro ao atualizar candidatura." };
+  }
 
   revalidatePath("/dashboard/director");
   revalidatePath("/dashboard/user");

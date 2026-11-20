@@ -8,6 +8,7 @@ import {
   recordDecisionAction,
   createConferenceAction,
   updateUserRoleAction,
+  approveReviewerCandidateAction,
   markPaperPresentedAction,
   getSuggestedReviewersAction,
   autoAssignReviewersAction,
@@ -134,6 +135,14 @@ export default function DirectorActionsClient({
   );
   const [roleUpdatingId, setRoleUpdatingId] = useState<number | null>(null);
   const [roleNotification, setRoleNotification] = useState<string | null>(null);
+  const [roleError, setRoleError] = useState<string | null>(null);
+
+  // Filtros de fila editorial, usuários e busca de avaliadores
+  const [submissionSearch, setSubmissionSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState<"all" | "submitted" | "under_review" | "revisions_required" | "accepted">("all");
+  const [userSearch, setUserSearch] = useState("");
+  const [onlyReviewerCandidates, setOnlyReviewerCandidates] = useState(false);
+  const [reviewerSearch, setReviewerSearch] = useState("");
 
   // Estados do Depósito Direto Crossref via API (Exclusivo Administrador / Editor)
   const [depositModalOpen, setDepositModalOpen] = useState(false);
@@ -385,7 +394,9 @@ export default function DirectorActionsClient({
   };
 
   const handleRoleChange = async (userId: number, newRole: string) => {
+    const previousRole = userRoles[userId];
     setRoleUpdatingId(userId);
+    setRoleError(null);
     setUserRoles((prev) => ({ ...prev, [userId]: newRole }));
 
     const formData = new FormData();
@@ -393,12 +404,45 @@ export default function DirectorActionsClient({
     formData.append("role", newRole);
 
     try {
-      await updateUserRoleAction(formData);
-      setRoleNotification(`Função do usuário #${userId} atualizada para "${newRole}" com sucesso.`);
-      setTimeout(() => setRoleNotification(null), 3000);
-    } catch (err) {
-      console.error(err);
-      alert("Erro ao atualizar papel do usuário.");
+      const res = await updateUserRoleAction(formData);
+      if (res.success) {
+        setRoleNotification(`Função do usuário #${userId} atualizada para "${newRole}".`);
+        setTimeout(() => setRoleNotification(null), 3500);
+        router.refresh();
+      } else {
+        setUserRoles((prev) => ({ ...prev, [userId]: previousRole }));
+        setRoleError(res.error || "Não foi possível alterar o papel do usuário.");
+      }
+    } catch {
+      setUserRoles((prev) => ({ ...prev, [userId]: previousRole }));
+      setRoleError("Erro ao atualizar papel do usuário.");
+    } finally {
+      setRoleUpdatingId(null);
+    }
+  };
+
+  const handleApproveCandidate = async (userId: number, approve: boolean) => {
+    setRoleUpdatingId(userId);
+    setRoleError(null);
+    const formData = new FormData();
+    formData.append("user_id", userId.toString());
+    formData.append("approve", approve ? "true" : "false");
+
+    try {
+      const res = await approveReviewerCandidateAction(formData);
+      if (res.success) {
+        setRoleNotification(
+          approve
+            ? `Candidatura do usuário #${userId} aprovada como Avaliador.`
+            : `Candidatura do usuário #${userId} removida.`
+        );
+        setTimeout(() => setRoleNotification(null), 3500);
+        router.refresh();
+      } else {
+        setRoleError(res.error || "Não foi possível processar candidatura.");
+      }
+    } catch {
+      setRoleError("Erro ao processar candidatura.");
     } finally {
       setRoleUpdatingId(null);
     }
@@ -531,24 +575,99 @@ export default function DirectorActionsClient({
       </div>
 
       {roleNotification && (
-        <div className="bg-emerald-50 border border-emerald-200 text-emerald-900 text-xs px-4 py-2.5 rounded-xl flex items-center space-x-2 animate-in fade-in">
+        <div className="bg-emerald-50 border border-emerald-200 text-emerald-900 text-xs px-4 py-2.5 rounded-xl flex items-center space-x-2">
           <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
           <span className="font-semibold">{roleNotification}</span>
+        </div>
+      )}
+
+      {roleError && (
+        <div role="alert" className="bg-red-50 border border-red-200 text-red-800 text-xs px-4 py-2.5 rounded-xl flex items-center space-x-2">
+          <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
+          <span className="font-semibold">{roleError}</span>
         </div>
       )}
 
       {/* ======================================================== */}
       {/* ABA 1: FILA EDITORIAL DE SUBMISSÕES                      */}
       {/* ======================================================== */}
-      {activeTab === "submissions" && (
+      {activeTab === "submissions" && (() => {
+        const q = submissionSearch.trim().toLowerCase();
+        const filteredSubmissions = submissions.filter((paper) => {
+          if (statusFilter === "accepted") {
+            if (paper.status !== "accepted" && paper.status !== "published") return false;
+          } else if (statusFilter !== "all" && paper.status !== statusFilter) {
+            return false;
+          }
+          if (q) {
+            const hay = [
+              `#${paper.id}`,
+              paper.title,
+              paper.track_title || "",
+              paper.sched_title || "",
+              ...(paper.authors || []).map((a) => `${a.full_name} ${a.affiliation}`),
+            ]
+              .join(" ")
+              .toLowerCase();
+            if (!hay.includes(q)) return false;
+          }
+          return true;
+        });
+
+        const statusCounts = {
+          all: submissions.length,
+          submitted: submissions.filter((p) => p.status === "submitted").length,
+          under_review: submissions.filter((p) => p.status === "under_review").length,
+          revisions_required: submissions.filter((p) => p.status === "revisions_required").length,
+          accepted: submissions.filter((p) => p.status === "accepted" || p.status === "published").length,
+        };
+
+        return (
         <div className="bg-white border border-slate-200 rounded-2xl shadow-xs overflow-hidden">
-          <div className="p-4 border-b border-slate-100 bg-slate-50/80 flex justify-between items-center text-xs font-semibold text-slate-700">
-            <span>Fila Editorial Completa ({submissions.length} trabalhos)</span>
-            <span className="text-slate-500 font-normal">Designação de pareceristas duplo-cegos e registro de decisões</span>
+          <div className="p-4 border-b border-slate-100 bg-slate-50/80 space-y-3">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div className="flex flex-wrap items-center gap-1.5 text-xs">
+                {(
+                  [
+                    { key: "all", label: `Todos (${statusCounts.all})` },
+                    { key: "submitted", label: `Sem Parecerista (${statusCounts.submitted})` },
+                    { key: "under_review", label: `Em Avaliação (${statusCounts.under_review})` },
+                    { key: "revisions_required", label: `Revisões (${statusCounts.revisions_required})` },
+                    { key: "accepted", label: `Aceitos/Publicados (${statusCounts.accepted})` },
+                  ] as const
+                ).map((pill) => (
+                  <button
+                    key={pill.key}
+                    type="button"
+                    onClick={() => setStatusFilter(pill.key)}
+                    className={`px-2.5 py-1 rounded-lg font-semibold transition cursor-pointer ${
+                      statusFilter === pill.key
+                        ? "bg-purple-600 text-white"
+                        : "bg-white border border-slate-200 text-slate-600 hover:bg-slate-100"
+                    }`}
+                  >
+                    {pill.label}
+                  </button>
+                ))}
+              </div>
+              <input
+                type="search"
+                value={submissionSearch}
+                onChange={(e) => setSubmissionSearch(e.target.value)}
+                placeholder="Buscar por título, autor ou #ID..."
+                aria-label="Buscar submissões"
+                className="w-full sm:w-64 px-3 py-1.5 border border-slate-300 rounded-lg text-xs bg-white focus:ring-2 focus:ring-purple-500 focus:outline-hidden"
+              />
+            </div>
           </div>
 
           <div className="divide-y divide-slate-100">
-            {submissions.map((paper) => {
+            {filteredSubmissions.length === 0 && (
+              <div className="p-10 text-center text-xs text-slate-500">
+                Nenhuma submissão encontrada para o filtro selecionado.
+              </div>
+            )}
+            {filteredSubmissions.map((paper) => {
               const completedReviews = paper.reviews?.filter((r) => r.status === "completed") || [];
               const pendingReviews = paper.reviews?.filter((r) => r.status === "pending") || [];
               const isExpanded = expandedReviewsPaperId === paper.id;
@@ -742,82 +861,165 @@ export default function DirectorActionsClient({
             })}
           </div>
         </div>
-      )}
+        );
+      })()}
 
       {/* ======================================================== */}
       {/* ABA 2: ATRIBUIÇÃO DE FUNÇÕES AOS USUÁRIOS                */}
       {/* ======================================================== */}
-      {activeTab === "users" && (
+      {activeTab === "users" && (() => {
+        const pendingCandidatesCount = allUsers.filter(
+          (u) => (u.reviewer_status === "pending" || (u.is_reviewer_candidate === 1 && u.role !== "reviewer")) && !["admin", "manager", "director"].includes(u.role)
+        ).length;
+
+        const uq = userSearch.trim().toLowerCase();
+        const filteredUsers = allUsers.filter((u) => {
+          const isPendingCandidate =
+            (u.reviewer_status === "pending" || (u.is_reviewer_candidate === 1 && u.role !== "reviewer")) &&
+            !["admin", "manager", "director"].includes(u.role);
+          if (onlyReviewerCandidates && !isPendingCandidate) return false;
+          if (uq) {
+            const hay = [
+              u.full_name,
+              u.email,
+              u.affiliation || "",
+              u.ror_id || "",
+              u.review_interests || "",
+              u.academic_title || "",
+            ]
+              .join(" ")
+              .toLowerCase();
+            if (!hay.includes(uq)) return false;
+          }
+          return true;
+        });
+
+        return (
         <div className="bg-white border border-slate-200 rounded-2xl shadow-xs overflow-hidden space-y-4 p-6">
-          <div className="border-b border-slate-100 pb-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <div className="border-b border-slate-100 pb-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
               <h3 className="text-base font-bold text-slate-900">
-                Gerenciamento e Atribuição de Funções Editoriais
+                Pessoas, Papéis e Candidaturas a Avaliador
               </h3>
               <p className="text-xs text-slate-500">
-                O Administrador pode designar qualquer usuário como Autor, Avaliador (Parecerista) ou Editor.
+                Aprove candidaturas a parecerista, filtre por área/instituição (ROR) ou altere papéis editoriais.
               </p>
             </div>
-            <span className="text-xs font-semibold bg-purple-50 text-purple-800 px-3 py-1 rounded-lg border border-purple-200 self-start sm:self-auto">
-              Total: {allUsers.length} usuários registrados
-            </span>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setOnlyReviewerCandidates((v) => !v)}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer border ${
+                  onlyReviewerCandidates
+                    ? "bg-purple-600 text-white border-purple-600"
+                    : "bg-purple-50 text-purple-800 border-purple-200 hover:bg-purple-100"
+                }`}
+              >
+                Candidatos a Avaliador ({pendingCandidatesCount})
+              </button>
+              <input
+                type="search"
+                value={userSearch}
+                onChange={(e) => setUserSearch(e.target.value)}
+                placeholder="Buscar nome, e-mail, ROR ou área..."
+                aria-label="Buscar usuários"
+                className="w-full sm:w-56 px-3 py-1.5 border border-slate-300 rounded-lg text-xs bg-white focus:ring-2 focus:ring-purple-500 focus:outline-hidden"
+              />
+            </div>
           </div>
 
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs">
               <thead className="bg-slate-50 text-slate-500 uppercase tracking-wider font-semibold border-b border-slate-200">
                 <tr>
-                  <th className="py-3 px-4">Nome Completo</th>
-                  <th className="py-3 px-4">E-mail / Usuário</th>
-                  <th className="py-3 px-4">Filiação Institucional</th>
+                  <th className="py-3 px-4">Nome &amp; Identificadores</th>
+                  <th className="py-3 px-4">E-mail</th>
+                  <th className="py-3 px-4">Instituição (ROR) &amp; Áreas</th>
                   <th className="py-3 px-4">Função Atual</th>
-                  <th className="py-3 px-4 text-right">Alterar Função</th>
+                  <th className="py-3 px-4 text-right">Ações</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {allUsers.map((user) => {
+                {filteredUsers.map((user) => {
                   const currentRole = userRoles[user.id] || user.role;
                   const isUpdating = roleUpdatingId === user.id;
+                  const isPendingCandidate =
+                    (user.reviewer_status === "pending" || (user.is_reviewer_candidate === 1 && currentRole !== "reviewer")) &&
+                    !["admin", "manager", "director"].includes(currentRole);
 
                   return (
                     <tr key={user.id} className="hover:bg-slate-50/70 transition">
-                      <td className="py-3 px-4 font-bold text-slate-900">
-                        {user.full_name}
+                      <td className="py-3 px-4">
+                        <span className="font-bold text-slate-900 block">{user.full_name}</span>
+                        {user.academic_title && (
+                          <span className="text-[11px] text-slate-500 block">{user.academic_title}</span>
+                        )}
+                        <div className="flex flex-wrap items-center gap-1 mt-1">
+                          {user.orcid && (
+                            <span className="bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-mono px-1.5 py-0.5 rounded">
+                              ORCID: {user.orcid}
+                            </span>
+                          )}
+                          {isPendingCandidate && (
+                            <span className="bg-amber-50 text-amber-800 border border-amber-200 text-[10px] font-bold px-1.5 py-0.5 rounded">
+                              Candidato a Avaliador
+                            </span>
+                          )}
+                        </div>
                       </td>
                       <td className="py-3 px-4 text-slate-600 font-mono text-[11px]">
                         {user.email}
                       </td>
-                      <td className="py-3 px-4 text-slate-600">
-                        {user.affiliation || "Instituição de Ensino Superior"}
+                      <td className="py-3 px-4 text-slate-600 space-y-1">
+                        <span className="block">{user.affiliation || "Não informada"}</span>
+                        {user.ror_id && (
+                          <span className="text-[10px] font-mono text-blue-700 bg-blue-50 px-1.5 py-0.5 rounded inline-block">
+                            ROR: {user.ror_id.replace("https://ror.org/", "")}
+                          </span>
+                        )}
+                        {user.review_interests && (
+                          <span className="text-[10px] text-purple-700 block">
+                            Áreas: {user.review_interests}
+                          </span>
+                        )}
                       </td>
                       <td className="py-3 px-4">
                         <span className={`px-2.5 py-1 rounded-full text-[11px] font-bold ${
-                          currentRole === "director" || currentRole === "admin"
+                          currentRole === "director" || currentRole === "admin" || currentRole === "manager"
                             ? "bg-purple-100 text-purple-800 border border-purple-200"
                             : currentRole === "reviewer"
                             ? "bg-blue-100 text-blue-800 border border-blue-200"
                             : "bg-emerald-100 text-emerald-800 border border-emerald-200"
                         }`}>
-                          {currentRole === "admin"
-                            ? "Administrador"
-                            : currentRole === "director"
-                            ? "Editor Chefe"
+                          {currentRole === "admin" || currentRole === "director" || currentRole === "manager"
+                            ? "Administrador (Editor)"
                             : currentRole === "reviewer"
-                            ? "Avaliador (Parecerista)"
+                            ? "Avaliador"
                             : "Autor"}
                         </span>
                       </td>
-                      <td className="py-3 px-4 text-right">
+                      <td className="py-3 px-4 text-right space-x-1.5 whitespace-nowrap">
+                        {isPendingCandidate && (
+                          <button
+                            type="button"
+                            disabled={isUpdating}
+                            onClick={() => handleApproveCandidate(user.id, true)}
+                            className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-2.5 py-1 rounded-lg text-[11px] transition cursor-pointer disabled:opacity-50"
+                          >
+                            Aprovar Avaliador
+                          </button>
+                        )}
                         <select
                           value={currentRole}
                           disabled={isUpdating}
+                          aria-label={`Alterar papel de ${user.full_name}`}
                           onChange={(e) => handleRoleChange(user.id, e.target.value)}
                           className="bg-white border border-slate-300 rounded-lg px-2.5 py-1 text-xs font-semibold text-slate-700 focus:ring-2 focus:ring-purple-500 focus:outline-hidden cursor-pointer"
                         >
                           <option value="author">Autor</option>
-                          <option value="reviewer">Avaliador (Parecerista)</option>
-                          <option value="director">Editor de Seção</option>
-                          <option value="admin">Administrador Geral</option>
+                          <option value="reviewer">Avaliador</option>
+                          <option value="director">Editor / Direção</option>
+                          <option value="admin">Administrador</option>
                         </select>
                       </td>
                     </tr>
@@ -827,7 +1029,8 @@ export default function DirectorActionsClient({
             </table>
           </div>
         </div>
-      )}
+        );
+      })()}
 
       {/* ======================================================== */}
       {/* ABA 3: INTEROPERABILIDADE GLOBAL & DEPÓSITO CROSSREF      */}
@@ -1952,11 +2155,21 @@ export default function DirectorActionsClient({
               </div>
             )}
 
-            {/* Lista de Avaliadores com Matching Score */}
+            {/* Lista de Avaliadores com Matching Score e Busca */}
             <div className="space-y-2">
-              <label className="block text-xs font-bold text-slate-700 uppercase">
-                Ou Selecione um Avaliador Compatível:
-              </label>
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <label htmlFor="assign-reviewer-search" className="block text-xs font-bold text-slate-700 uppercase">
+                  Ou Selecione um Avaliador Compatível:
+                </label>
+                <input
+                  id="assign-reviewer-search"
+                  type="search"
+                  value={reviewerSearch}
+                  onChange={(e) => setReviewerSearch(e.target.value)}
+                  placeholder="Filtrar por nome, instituição ou área..."
+                  className="w-full sm:w-56 px-2.5 py-1 border border-slate-300 rounded-lg text-xs bg-white focus:ring-2 focus:ring-purple-500 focus:outline-hidden"
+                />
+              </div>
 
               {matchingLoading ? (
                 <div className="p-6 text-center text-slate-500 text-xs flex items-center justify-center space-x-2">
@@ -1970,8 +2183,17 @@ export default function DirectorActionsClient({
                     score: 50,
                     reasons: ["Cadastrado no comitê"],
                     isConflict: false,
-                    assignedCount: 0
-                  }))).map((item) => {
+                    assignedCount: 0,
+                    completedCount: 0
+                  }))).filter((item) => {
+                    const rq = reviewerSearch.trim().toLowerCase();
+                    if (!rq) return true;
+                    const r = item.reviewer;
+                    return [r.full_name, r.email, r.affiliation || "", r.ror_id || "", r.review_interests || ""]
+                      .join(" ")
+                      .toLowerCase()
+                      .includes(rq);
+                  }).map((item) => {
                     const r = item.reviewer;
                     const isSelected = selectedReviewerId === r.id.toString();
                     const disabled = item.isConflict;

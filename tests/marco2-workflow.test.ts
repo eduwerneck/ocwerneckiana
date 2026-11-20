@@ -14,6 +14,8 @@ const {
   generateCrossrefXml,
   generateOaiPmhResponse,
   createConference,
+  updateUserRole,
+  approveReviewerCandidate,
 } = await import("../src/lib/ocs-service.ts");
 
 seedDatabaseIfEmpty({ force: true });
@@ -168,5 +170,41 @@ describe("Marco 2 — Multi-Conferência, Crossref 4.4.2 & OAI-PMH 2.0", () => {
 
     const badToken = generateOaiPmhResponse("ListRecords", { resumptionToken: "abc" }, "https://ocw.example.org");
     assert.equal(badToken.includes('code="badResumptionToken"'), true);
+  });
+});
+
+describe("Entrega A/B — Schema v2 (ROR/OAuth), Aprovação de Avaliador e Trava de Último Admin", () => {
+  it("migração v2 adiciona ror_id, academic_title, reviewer_status, google_id e auth_provider", () => {
+    const cols = db.prepare("PRAGMA table_info(users)").all() as Array<{ name: string }>;
+    const names = new Set(cols.map((c) => c.name));
+    assert.equal(names.has("ror_id"), true);
+    assert.equal(names.has("academic_title"), true);
+    assert.equal(names.has("reviewer_status"), true);
+    assert.equal(names.has("google_id"), true);
+    assert.equal(names.has("auth_provider"), true);
+  });
+
+  it("approveReviewerCandidate aprova candidato a avaliador", () => {
+    // Usuário 7 (coauthor) nasce como author
+    db.prepare("UPDATE users SET is_reviewer_candidate = 1, reviewer_status = 'pending' WHERE id = 7").run();
+    approveReviewerCandidate(7, true);
+    const updated = db.prepare("SELECT role, reviewer_status, is_reviewer_candidate FROM users WHERE id = 7").get() as {
+      role: string;
+      reviewer_status: string;
+      is_reviewer_candidate: number;
+    };
+    assert.equal(updated.role, "reviewer");
+    assert.equal(updated.reviewer_status, "approved");
+    assert.equal(updated.is_reviewer_candidate, 1);
+  });
+
+  it("updateUserRole impede remover o último administrador ativo do sistema", () => {
+    // Rebaixa admin (1) e manager (2) -> resta apenas director (3)
+    updateUserRole(1, "author");
+    updateUserRole(2, "author");
+    assert.throws(
+      () => updateUserRole(3, "author"),
+      /último administrador ativo/i
+    );
   });
 });

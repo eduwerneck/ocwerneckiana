@@ -392,6 +392,24 @@ function runMigrations(): void {
     // Purga de senha SMTP armazenada em texto puro em bancos legados
     db.exec("DELETE FROM app_settings WHERE key = 'smtp_pass';");
   });
+
+  // Migração v2: ROR ID, titulação acadêmica, fluxo de aprovação de avaliador e identidades OAuth (Google/ORCID)
+  applyMigration(2, () => {
+    ensureColumn("users", "ror_id", "TEXT");
+    ensureColumn("users", "academic_title", "TEXT");
+    ensureColumn("users", "reviewer_status", "TEXT DEFAULT 'none'");
+    ensureColumn("users", "google_id", "TEXT");
+    ensureColumn("users", "auth_provider", "TEXT DEFAULT 'local'");
+
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_users_google_id ON users(google_id);
+      CREATE INDEX IF NOT EXISTS idx_users_orcid ON users(orcid);
+      CREATE INDEX IF NOT EXISTS idx_users_reviewer_status ON users(reviewer_status);
+    `);
+
+    db.exec("UPDATE users SET reviewer_status = 'approved' WHERE role = 'reviewer' AND (reviewer_status IS NULL OR reviewer_status = 'none');");
+    db.exec("UPDATE users SET reviewer_status = 'pending' WHERE is_reviewer_candidate = 1 AND role != 'reviewer' AND (reviewer_status IS NULL OR reviewer_status = 'none');");
+  });
 }
 
 runMigrations();

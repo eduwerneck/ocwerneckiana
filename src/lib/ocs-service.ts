@@ -78,10 +78,15 @@ export interface User {
   role: string;
   bio: string;
   is_reviewer_candidate?: number;
+  reviewer_status?: "none" | "pending" | "approved";
   review_interests?: string;
   preferred_track_ids?: string;
   lattes_url?: string;
   orcid?: string;
+  ror_id?: string;
+  academic_title?: string;
+  google_id?: string;
+  auth_provider?: string;
 }
 
 export interface ReviewerMatch {
@@ -90,6 +95,7 @@ export interface ReviewerMatch {
   reasons: string[];
   isConflict: boolean;
   assignedCount: number;
+  completedCount?: number;
 }
 
 export interface PaperAuthor {
@@ -1026,12 +1032,18 @@ export function getSuggestedReviewersForPaper(paperId: number): ReviewerMatch[] 
       authorEmails.includes((r.email || "").toLowerCase()) ||
       authorNames.some(name => (r.full_name || "").toLowerCase().includes(name));
 
-    // Contar quantas avaliações ativas este parecerista já possui no momento
+    // Contar quantas avaliações ativas (pendentes) e concluídas este parecerista possui
     const activeAssignmentsRow = db.prepare(`
       SELECT COUNT(*) as count FROM review_assignments 
       WHERE reviewer_id = ? AND status = 'pending'
     `).get(r.id) as { count: number };
     const assignedCount = activeAssignmentsRow ? activeAssignmentsRow.count : 0;
+
+    const completedAssignmentsRow = db.prepare(`
+      SELECT COUNT(*) as count FROM review_assignments
+      WHERE reviewer_id = ? AND status = 'completed'
+    `).get(r.id) as { count: number };
+    const completedCount = completedAssignmentsRow ? completedAssignmentsRow.count : 0;
 
     if (isAuthor) {
       matches.push({
@@ -1040,6 +1052,7 @@ export function getSuggestedReviewersForPaper(paperId: number): ReviewerMatch[] 
         reasons: ["Conflito de Interesse: Autor/coautor do manuscrito"],
         isConflict: true,
         assignedCount,
+        completedCount,
       });
       continue;
     }
@@ -1088,6 +1101,7 @@ export function getSuggestedReviewersForPaper(paperId: number): ReviewerMatch[] 
       reasons,
       isConflict: false,
       assignedCount,
+      completedCount,
     });
   }
 
@@ -1116,21 +1130,47 @@ export function updateUserReviewerProfile(userId: number, data: {
   preferred_track_ids: string;
   lattes_url?: string;
   orcid?: string;
+  affiliation?: string;
+  ror_id?: string;
+  academic_title?: string;
 }) {
+  const current = db.prepare("SELECT role, reviewer_status FROM users WHERE id = ?").get(userId) as
+    | { role: string; reviewer_status: string | null }
+    | undefined;
+
+  let nextStatus = current?.reviewer_status || "none";
+  if (data.is_reviewer_candidate) {
+    if (current?.role === "reviewer" || nextStatus === "approved") {
+      nextStatus = "approved";
+    } else {
+      nextStatus = "pending";
+    }
+  } else if (current?.role !== "reviewer") {
+    nextStatus = "none";
+  }
+
   db.prepare(`
     UPDATE users
     SET is_reviewer_candidate = ?,
+        reviewer_status = ?,
         review_interests = ?,
         preferred_track_ids = ?,
         lattes_url = ?,
-        orcid = ?
+        orcid = ?,
+        affiliation = COALESCE(NULLIF(?, ''), affiliation),
+        ror_id = COALESCE(?, ror_id),
+        academic_title = COALESCE(?, academic_title)
     WHERE id = ?
   `).run(
     data.is_reviewer_candidate ? 1 : 0,
+    nextStatus,
     data.review_interests,
     data.preferred_track_ids,
     data.lattes_url || null,
     data.orcid || null,
+    data.affiliation ?? "",
+    data.ror_id !== undefined ? data.ror_id || null : null,
+    data.academic_title !== undefined ? data.academic_title || null : null,
     userId
   );
 }
@@ -1889,7 +1929,49 @@ export function createConference(data: {
 }
 
 export function updateUserRole(userId: number, role: string): boolean {
-  db.prepare("UPDATE users SET role = ? WHERE id = ?").run(role, userId);
+  const adminRoles = new Set(["admin", "manager", "director"]);
+  const target = db.prepare("SELECT id, role FROM users WHERE id = ?").get(userId) as { id: number; role: string } | undefined;
+  if (!target) {
+    throw new Error("Usuário não encontrado.");
+  }
+
+  // Trava de segurança: impedir remoção do último administrador/diretor ativo do sistema
+  if (adminRoles.has(target.role) && !adminRoles.has(role)) {
+    const countRow = db
+      .prepare("SELECT COUNT(*) as count FROM users WHERE role IN ('admin', 'manager', 'director')")
+      .get() as { count: number };
+    if ((countRow?.count || 0) <= 1) {
+      throw new Error("Não é possível remover o último administrador ativo do sistema.");
+    }
+  }
+
+  if (role === "reviewer") {
+    db.prepare("UPDATE users SET role = ?, is_reviewer_candidate = 1, reviewer_status = 'approved' WHERE id = ?").run(role, userId);
+  } else {
+    db.prepare("UPDATE users SET role = ? WHERE id = ?").run(role, userId);
+  }
+
+  revokeUserSessions(userId);
+  return true;
+}
+
+export function approveReviewerCandidate(userId: number, approve: boolean): boolean {
+  const target = db.prepare("SELECT id, role FROM users WHERE id = ?").get(userId) as { id: number; role: string } | undefined;
+  if (!target) {
+    throw new Error("Usuário não encontrado.");
+  }
+
+  if (approve) {
+    const isAdmin = ["admin", "manager", "director"].includes(target.role);
+    const nextRole = isAdmin ? target.role : "reviewer";
+    db.prepare("UPDATE users SET role = ?, is_reviewer_candidate = 1, reviewer_status = 'approved' WHERE id = ?").run(
+      nextRole,
+      userId
+    );
+  } else {
+    db.prepare("UPDATE users SET is_reviewer_candidate = 0, reviewer_status = 'none' WHERE id = ?").run(userId);
+  }
+
   revokeUserSessions(userId);
   return true;
 }

@@ -53,6 +53,10 @@ export async function registerUserAction(formData: FormData): Promise<{ success:
   const fullName = parseNonEmptyString(formData.get("full_name"), 150);
   const email = parseNonEmptyString(formData.get("email"), 254)?.toLowerCase();
   const affiliation = parseOptionalString(formData.get("affiliation"), 200);
+  const rorId = parseOptionalString(formData.get("ror_id"), 120);
+  const wantsReviewer = formData.get("wants_reviewer") === "true";
+  const reviewInterests = parseOptionalString(formData.get("review_interests"), 1000);
+  const academicTitle = parseOptionalString(formData.get("academic_title"), 150);
   const password = parseNonEmptyString(formData.get("password"), 200);
 
   if (!fullName || !email || !isValidEmail(email)) {
@@ -71,12 +75,27 @@ export async function registerUserAction(formData: FormData): Promise<{ success:
   const suffix = crypto.randomBytes(3).toString("hex");
   const username = `${baseUsername}_${suffix}`;
   const passwordHash = hashPassword(password);
+  const reviewerStatus = wantsReviewer ? "pending" : "none";
 
   try {
     const res = db.prepare(`
-      INSERT INTO users (username, email, full_name, affiliation, role, bio, password_hash)
-      VALUES (?, ?, ?, ?, 'author', '', ?)
-    `).run(username, email, fullName, affiliation, passwordHash);
+      INSERT INTO users (
+        username, email, full_name, affiliation, ror_id, academic_title,
+        role, bio, password_hash, is_reviewer_candidate, reviewer_status, review_interests, auth_provider
+      )
+      VALUES (?, ?, ?, ?, ?, ?, 'author', '', ?, ?, ?, ?, 'local')
+    `).run(
+      username,
+      email,
+      fullName,
+      affiliation,
+      rorId || null,
+      wantsReviewer ? academicTitle || null : null,
+      passwordHash,
+      wantsReviewer ? 1 : 0,
+      reviewerStatus,
+      wantsReviewer ? reviewInterests : null
+    );
 
     await createSession(Number(res.lastInsertRowid));
     revalidatePath("/", "layout");

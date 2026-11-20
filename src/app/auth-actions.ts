@@ -3,7 +3,7 @@
 import crypto from "node:crypto";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import db from "@/lib/db";
+import db, { seedDatabaseIfEmpty } from "@/lib/db";
 import {
   ADMIN_ROLES,
   authenticateCredentials,
@@ -115,12 +115,19 @@ export async function registerUserAction(formData: FormData): Promise<{ success:
 }
 
 export async function demoLoginAction(role: "admin" | "user"): Promise<{ success: boolean; error?: string; redirectTo?: string }> {
-  if (process.env.OCW_DEMO_MODE !== "true") {
+  const demoAllowed =
+    process.env.OCW_DEMO_MODE === "true" ||
+    (Boolean(process.env.VERCEL) && process.env.OCW_DEMO_MODE !== "false");
+  if (!demoAllowed) {
     return { success: false, error: "Modo de demonstração desabilitado." };
   }
 
   const targetUsername = role === "admin" ? "director" : "author";
-  const user = db.prepare("SELECT id FROM users WHERE username = ? LIMIT 1").get(targetUsername) as { id: number } | undefined;
+  let user = db.prepare("SELECT id FROM users WHERE username = ? LIMIT 1").get(targetUsername) as { id: number } | undefined;
+  if (!user) {
+    seedDatabaseIfEmpty({ force: true });
+    user = db.prepare("SELECT id FROM users WHERE username = ? LIMIT 1").get(targetUsername) as { id: number } | undefined;
+  }
   if (!user) {
     return { success: false, error: "Usuário de demonstração não encontrado (execute o seed primeiro)." };
   }

@@ -16,7 +16,9 @@ export default async function LoginPage({
   const resolved = await searchParams;
   const nextPath = resolved?.next ? sanitizeNextPath(resolved.next, "") : "";
   const oauthError = resolved?.error || "";
-  const demoMode = process.env.OCW_DEMO_MODE === "true";
+  const demoMode =
+    process.env.OCW_DEMO_MODE === "true" ||
+    (Boolean(process.env.VERCEL) && process.env.OCW_DEMO_MODE !== "false");
   const googleEnabled = Boolean(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET);
   const orcidEnabled = Boolean(process.env.ORCID_CLIENT_ID && process.env.ORCID_CLIENT_SECRET);
 

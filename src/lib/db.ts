@@ -419,7 +419,10 @@ runMigrations();
  * Em testes, pode ser chamada com `{ force: true }` em banco `:memory:`.
  */
 export function seedDatabaseIfEmpty(options?: { force?: boolean }): boolean {
-  if (!options?.force && process.env.OCW_AUTO_SEED !== "true") {
+  const autoSeedAllowed =
+    process.env.OCW_AUTO_SEED === "true" ||
+    (Boolean(process.env.VERCEL) && process.env.OCW_AUTO_SEED !== "false");
+  if (!options?.force && !autoSeedAllowed) {
     return false;
   }
 

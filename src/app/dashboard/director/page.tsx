@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { getAllSubmissionsForDirector, getAllUsers, getEmailLogs, getPublicSmtpSettings } from "@/lib/ocs-service";
+import { getAllConferences, getAllSubmissionsForDirector, getAllUsers, getEmailLogs, getPublicSmtpSettings } from "@/lib/ocs-service";
 import { ADMIN_ROLES, requirePageAuth } from "@/lib/auth";
 import { formatRoleLabel } from "@/lib/role-labels";
 import { BookOpen, ChevronRight, UserCheck } from "lucide-react";
@@ -12,6 +12,7 @@ export default async function DirectorDashboardPage() {
 
   const submissions = getAllSubmissionsForDirector();
   const allUsers = getAllUsers();
+  const conferences = getAllConferences();
   const reviewers = allUsers.filter((u) => u.role === "reviewer" || u.is_reviewer_candidate === 1);
   const emailLogs = getEmailLogs(50);
   const smtpSettings = getPublicSmtpSettings();
@@ -100,6 +101,7 @@ export default async function DirectorDashboardPage() {
         submissions={submissions}
         reviewers={reviewers}
         allUsers={allUsers}
+        conferences={conferences}
         emailLogs={emailLogs}
         smtpSettings={smtpSettings}
       />

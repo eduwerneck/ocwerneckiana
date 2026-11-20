@@ -25,12 +25,23 @@ import {
   AlertTriangle,
   Layers,
   Info,
-  Scale
+  Scale,
+  Search,
+  Loader2,
+  Mail,
+  Building2,
+  UserPlus
 } from "lucide-react";
-import { getCurrentUserAuthorProfileAction, submitPaperAction } from "@/app/actions";
+import {
+  getCurrentUserAuthorProfileAction,
+  searchRegisteredUsersAction,
+  submitPaperAction,
+} from "@/app/actions";
+import type { RegisteredAuthorSummary } from "@/lib/ocs-service";
 import { convertReferencesList, countWords, calculateEstimatedPages } from "@/lib/references";
 
 interface CoAuthor {
+  user_id: number;
   full_name: string;
   email: string;
   affiliation: string;
@@ -122,48 +133,74 @@ export default function SubmitWizardPage() {
   const [abstract, setAbstract] = useState("");
   const [keywords, setKeywords] = useState("");
   const [funding, setFunding] = useState("");
-  const [authors, setAuthors] = useState<CoAuthor[]>([
-    {
-      full_name: "",
-      email: "",
-      affiliation: "",
-      orcid: "",
-      ror_id: "",
-      credit_roles: "Conceitualização, Metodologia, Escrita – rascunho original",
-      is_primary: true,
-    },
-  ]);
+  const [authors, setAuthors] = useState<CoAuthor[]>([]);
+  const [authChecked, setAuthChecked] = useState(false);
+  const [coauthorQuery, setCoauthorQuery] = useState("");
+  const [coauthorResults, setCoauthorResults] = useState<RegisteredAuthorSummary[]>([]);
+  const [coauthorSearching, setCoauthorSearching] = useState(false);
 
-  // Pré-preenche automaticamente o 1º autor com os dados do usuário autenticado (Nome, E-mail, Instituição, ROR, ORCID)
+  // Pré-preenche automaticamente o 1º autor com os dados oficiais do usuário autenticado
   useEffect(() => {
     let active = true;
     getCurrentUserAuthorProfileAction()
       .then((profile) => {
-        if (!active || !profile) return;
+        if (!active) return;
+        setAuthChecked(true);
+        if (!profile) return;
         setAuthors((prev) => {
-          if (prev.length === 0) return prev;
-          const first = prev[0];
-          if (first.full_name || first.email) return prev;
+          if (prev.length > 0) return prev;
           return [
             {
-              ...first,
+              user_id: profile.id,
               full_name: profile.full_name,
               email: profile.email,
               affiliation: profile.affiliation,
               orcid: profile.orcid,
               ror_id: profile.ror_id,
+              credit_roles: "Conceitualização, Metodologia, Escrita – rascunho original",
+              is_primary: true,
             },
-            ...prev.slice(1),
           ];
         });
       })
       .catch(() => {
-        // Sem sessão ativa: autor pode preencher manualmente
+        if (active) setAuthChecked(true);
       });
     return () => {
       active = false;
     };
   }, []);
+
+  // Busca coautores cadastrados no sistema (por nome, e-mail, instituição ou ORCID)
+  useEffect(() => {
+    const term = coauthorQuery.trim();
+    if (term.length < 2) {
+      setCoauthorResults([]);
+      setCoauthorSearching(false);
+      return;
+    }
+
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      setCoauthorSearching(true);
+      try {
+        const excludeIds = authors.map((a) => a.user_id);
+        const res = await searchRegisteredUsersAction(term, excludeIds);
+        if (!cancelled && res.success) {
+          setCoauthorResults(res.users);
+        }
+      } catch {
+        if (!cancelled) setCoauthorResults([]);
+      } finally {
+        if (!cancelled) setCoauthorSearching(false);
+      }
+    }, 300);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [coauthorQuery, authors]);
 
   // Step 3 (Continuação): Referências Bibliográficas & Mini-Agente
   const [referencesText, setReferencesText] = useState("");
@@ -298,29 +335,33 @@ export default function SubmitWizardPage() {
     }
   };
 
-  const addAuthor = () => {
+  const addRegisteredCoAuthor = (user: RegisteredAuthorSummary) => {
+    if (authors.some((a) => a.user_id === user.id)) return;
     setAuthors([
       ...authors,
       {
-        full_name: "",
-        email: "",
-        affiliation: "",
-        orcid: "",
-        ror_id: "",
+        user_id: user.id,
+        full_name: user.full_name,
+        email: user.email,
+        affiliation: user.affiliation,
+        orcid: user.orcid,
+        ror_id: user.ror_id,
         credit_roles: "Investigação, Metodologia, Redação",
-        is_primary: false,
+        is_primary: authors.length === 0,
       },
     ]);
+    setCoauthorQuery("");
+    setCoauthorResults([]);
   };
 
   const removeAuthor = (index: number) => {
-    if (authors.length === 1) return;
+    if (index === 0 || authors.length <= 1) return;
     setAuthors(authors.filter((_, i) => i !== index));
   };
 
-  const updateAuthor = (index: number, field: keyof CoAuthor, value: string | boolean) => {
+  const updateAuthorCredit = (index: number, creditRoles: string) => {
     const updated = [...authors];
-    updated[index] = { ...updated[index], [field]: value };
+    updated[index] = { ...updated[index], credit_roles: creditRoles };
     setAuthors(updated);
   };
 
@@ -350,11 +391,7 @@ export default function SubmitWizardPage() {
     formData.append("page_end", String(estimatedPages.end));
 
     authors.forEach((a) => {
-      formData.append("author_name", a.full_name);
-      formData.append("author_email", a.email);
-      formData.append("author_affiliation", a.affiliation);
-      formData.append("author_orcid", a.orcid);
-      formData.append("author_ror", a.ror_id);
+      formData.append("author_user_id", String(a.user_id));
       formData.append("author_credit", a.credit_roles);
     });
 
@@ -1030,144 +1067,167 @@ export default function SubmitWizardPage() {
               </div>
             </div>
 
-            {/* Cadastro de Autores com Identificadores Persistentes (ORCID, ROR e CRediT) */}
+            {/* Autores vinculados exclusivamente a usuários cadastrados no sistema */}
             <div className="border-t border-slate-100 pt-6 space-y-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h3 className="text-sm font-bold text-slate-900 flex items-center space-x-1.5">
-                    <Users className="w-4 h-4 text-blue-600" />
-                    <span>Autores, Identificadores (ORCID, ROR) e Papéis CRediT</span>
-                  </h3>
-                  <p className="text-xs text-slate-500">Adicione todos os coautores com seus identificadores persistentes e papéis de contribuição.</p>
-                </div>
-                <button
-                  type="button"
-                  onClick={addAuthor}
-                  className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold px-3 py-1.5 rounded-md text-xs flex items-center space-x-1 transition"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  <span>Adicionar Coautor</span>
-                </button>
+              <div>
+                <h3 className="text-sm font-bold text-slate-900 flex items-center space-x-1.5">
+                  <Users className="w-4 h-4 text-blue-600" />
+                  <span>Autores Cadastrados (Nome, E-mail, ROR, ORCID e CRediT)</span>
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Todos os autores e coautores precisam estar cadastrados no portal para puxar automaticamente Nome completo, E-mail, Instituição (ROR) e ORCID para os anais.
+                </p>
               </div>
 
-              {/* Banner de Auto-preenchimento via ORCID */}
-              <div className="bg-emerald-50/80 border border-emerald-200 rounded-xl p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs text-emerald-950">
-                <div className="flex items-center space-x-2.5">
-                  <span className="w-5 h-5 rounded-full bg-emerald-600 text-white flex items-center justify-center font-bold text-[10px] shrink-0">
-                    iD
+              {authChecked && authors.length === 0 && (
+                <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-xs text-amber-900 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <span>
+                    Você precisa estar autenticado para vincular seu perfil como autor principal e buscar coautores cadastrados.
                   </span>
-                  <div>
-                    <span className="font-bold text-emerald-900 block">
-                      Dados Preenchidos Automaticamente via Autenticação ORCID
-                    </span>
-                    <p className="text-[11px] text-emerald-800">
-                      Como você fez login com seu ORCID iD, seus dados de autor principal já estão preenchidos sem necessidade de retrabalho.
-                    </p>
-                  </div>
+                  <Link
+                    href={`/login?next=/conference/${slug}/submit`}
+                    className="bg-amber-700 hover:bg-amber-800 text-white font-bold px-3.5 py-2 rounded-lg text-xs shrink-0 text-center"
+                  >
+                    Entrar / Cadastrar
+                  </Link>
                 </div>
-                <span className="self-start sm:self-auto text-[11px] font-mono font-bold bg-white px-2.5 py-1 rounded-md border border-emerald-300 text-emerald-800 shrink-0">
-                  ORCID: 0000-0002-1825-0097
-                </span>
-              </div>
+              )}
 
-              <div className="space-y-4">
+              {/* Buscador de Coautores Cadastrados */}
+              {authors.length > 0 && (
+                <div className="bg-blue-50/60 border border-blue-200 rounded-xl p-4 space-y-2.5">
+                  <label htmlFor="coauthor-search" className="text-xs font-bold text-blue-950 flex items-center space-x-1.5">
+                    <UserPlus className="w-3.5 h-3.5 text-blue-700" />
+                    <span>Adicionar Coautor Cadastrado</span>
+                  </label>
+                  <div className="relative">
+                    <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
+                    <input
+                      id="coauthor-search"
+                      type="text"
+                      value={coauthorQuery}
+                      onChange={(e) => setCoauthorQuery(e.target.value)}
+                      placeholder="Busque por nome completo, e-mail, instituição ou ORCID..."
+                      className="w-full pl-9 pr-9 py-2 bg-white border border-blue-300 rounded-lg text-xs focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
+                    />
+                    {coauthorSearching && (
+                      <Loader2 className="w-3.5 h-3.5 text-blue-600 animate-spin absolute right-3 top-2.5" />
+                    )}
+                  </div>
+
+                  {coauthorQuery.trim().length >= 2 && !coauthorSearching && coauthorResults.length === 0 && (
+                    <p className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                      Nenhum pesquisador cadastrado encontrado para &ldquo;{coauthorQuery.trim()}&rdquo;. Peça ao coautor que crie uma conta em <strong>Entrar / Cadastrar</strong> antes de adicioná-lo ao trabalho.
+                    </p>
+                  )}
+
+                  {coauthorResults.length > 0 && (
+                    <ul className="bg-white border border-slate-200 rounded-lg divide-y divide-slate-100 max-h-56 overflow-y-auto shadow-xs">
+                      {coauthorResults.map((u) => (
+                        <li key={u.id} className="p-2.5 flex items-center justify-between gap-3 hover:bg-blue-50/50">
+                          <div className="min-w-0 text-xs">
+                            <div className="font-bold text-slate-900 truncate">{u.full_name}</div>
+                            <div className="text-[11px] text-slate-500 flex flex-wrap items-center gap-x-2">
+                              <span>{u.email}</span>
+                              {u.affiliation && <span>• {u.affiliation}</span>}
+                              {u.orcid && <span className="font-mono text-emerald-700">• ORCID: {u.orcid}</span>}
+                              {u.ror_id && (
+                                <span className="font-mono text-blue-700">
+                                  • ROR: {u.ror_id.replace(/^https?:\/\/ror\.org\//, "")}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => addRegisteredCoAuthor(u)}
+                            className="bg-blue-600 hover:bg-blue-700 text-white font-bold px-2.5 py-1.5 rounded-md text-[11px] flex items-center space-x-1 shrink-0 cursor-pointer"
+                          >
+                            <Plus className="w-3 h-3" />
+                            <span>Adicionar</span>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )}
+
+              {/* Lista de Autores Vinculados (dados oficiais puxados do cadastro) */}
+              <div className="space-y-3">
                 {authors.map((author, index) => (
-                  <div key={index} className="border border-slate-200 rounded-lg p-4 bg-slate-50/50 space-y-3">
+                  <div key={author.user_id} className="border border-slate-200 rounded-xl p-4 bg-slate-50/60 space-y-3">
                     <div className="flex justify-between items-center text-xs font-bold text-slate-700">
-                      <span>{index === 0 ? "Autor Principal (Contato)" : `Coautor ${index + 1}`}</span>
+                      <div className="flex items-center space-x-2">
+                        <span>{index === 0 ? "Autor Principal (Contato)" : `Coautor ${index + 1}`}</span>
+                        <span className="bg-emerald-100 text-emerald-800 border border-emerald-200 text-[10px] font-bold px-2 py-0.5 rounded-full">
+                          Cadastro vinculado
+                        </span>
+                      </div>
                       {index > 0 && (
                         <button
                           type="button"
                           onClick={() => removeAuthor(index)}
-                          className="text-red-500 hover:text-red-700"
+                          className="text-red-500 hover:text-red-700 cursor-pointer"
+                          title="Remover coautor"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
                         </button>
                       )}
                     </div>
 
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs bg-white border border-slate-200/80 rounded-lg p-3">
                       <div>
-                        <label className="block text-[11px] font-semibold text-slate-600 mb-1">Nome Completo *</label>
-                        <input
-                          type="text"
-                          value={author.full_name}
-                          onChange={(e) => updateAuthor(index, "full_name", e.target.value)}
-                          placeholder="Nome Completo *"
-                          className="w-full border border-slate-300 rounded-md p-2 text-xs focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
-                          required
-                        />
+                        <span className="text-[10px] font-bold text-slate-400 uppercase block">Nome Completo</span>
+                        <span className="font-semibold text-slate-900">{author.full_name}</span>
                       </div>
                       <div>
-                        <label className="block text-[11px] font-semibold text-slate-600 mb-1">E-mail Institucional *</label>
-                        <input
-                          type="email"
-                          value={author.email}
-                          onChange={(e) => updateAuthor(index, "email", e.target.value)}
-                          placeholder="E-mail Institucional *"
-                          className="w-full border border-slate-300 rounded-md p-2 text-xs focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
-                          required
-                        />
+                        <span className="text-[10px] font-bold text-slate-400 uppercase block">E-mail</span>
+                        <span className="text-slate-700 inline-flex items-center space-x-1 break-all">
+                          <Mail className="w-3 h-3 text-slate-400 shrink-0" />
+                          <span>{author.email}</span>
+                        </span>
                       </div>
                       <div>
-                        <label className="block text-[11px] font-semibold text-slate-600 mb-1">Instituição / Universidade *</label>
-                        <input
-                          type="text"
-                          value={author.affiliation}
-                          onChange={(e) => updateAuthor(index, "affiliation", e.target.value)}
-                          placeholder="Instituição / Universidade *"
-                          className="w-full border border-slate-300 rounded-md p-2 text-xs focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
-                          required
-                        />
+                        <span className="text-[10px] font-bold text-slate-400 uppercase block">Instituição / ROR</span>
+                        <span className="text-slate-700 block">{author.affiliation || "Não informada"}</span>
+                        {author.ror_id && (
+                          <span className="inline-flex items-center space-x-1 text-[10px] font-mono text-blue-700 bg-blue-50 border border-blue-200 px-1.5 py-0.5 rounded mt-1">
+                            <Building2 className="w-2.5 h-2.5" />
+                            <span>ROR: {author.ror_id.replace(/^https?:\/\/ror\.org\//, "")}</span>
+                          </span>
+                        )}
+                      </div>
+                      <div>
+                        <span className="text-[10px] font-bold text-slate-400 uppercase block">ORCID iD</span>
+                        {author.orcid ? (
+                          <span className="inline-flex items-center space-x-1 text-[11px] font-mono text-emerald-800 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded mt-0.5">
+                            <span className="w-3.5 h-3.5 rounded-full bg-emerald-600 text-white font-bold text-[8px] flex items-center justify-center">
+                              iD
+                            </span>
+                            <span>{author.orcid.replace(/^https?:\/\/orcid\.org\//, "")}</span>
+                          </span>
+                        ) : (
+                          <span className="text-slate-400 text-[11px]">Não informado no perfil</span>
+                        )}
                       </div>
                     </div>
 
-                    {/* Metadados Acadêmicos Modernos: ORCID, ROR e CRediT */}
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2 border-t border-slate-200/60">
-                      <div>
-                        <label className="block text-[11px] font-semibold text-slate-700 mb-1 flex items-center space-x-1">
-                          <span className="w-3.5 h-3.5 rounded-full bg-[#a6ce39] text-white flex items-center justify-center font-bold text-[9px]">iD</span>
-                          <span>ORCID (Ex: 0000-0002-1825-0097)</span>
-                        </label>
-                        <input
-                          type="text"
-                          value={author.orcid}
-                          onChange={(e) => updateAuthor(index, "orcid", e.target.value)}
-                          placeholder="0000-0000-0000-0000"
-                          className="w-full border border-slate-300 rounded-md p-2 text-xs focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
-                        />
-                      </div>
-
-                      <div>
-                        <label className="block text-[11px] font-semibold text-slate-700 mb-1 flex items-center space-x-1">
-                          <span className="text-blue-700 font-bold text-[10px] bg-blue-100 px-1 rounded">ROR</span>
-                          <span>ROR ID da Instituição</span>
-                        </label>
-                        <input
-                          type="text"
-                          value={author.ror_id}
-                          onChange={(e) => updateAuthor(index, "ror_id", e.target.value)}
-                          placeholder="Ex: https://ror.org/01y9bpm73"
-                          className="w-full border border-slate-300 rounded-md p-2 text-xs focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
-                        />
-                      </div>
-
-                      <div>
-                        <label className="block text-[11px] font-semibold text-slate-700 mb-1">
-                          Papel CRediT do Autor
-                        </label>
-                        <select
-                          value={author.credit_roles}
-                          onChange={(e) => updateAuthor(index, "credit_roles", e.target.value)}
-                          className="w-full border border-slate-300 rounded-md p-2 text-xs bg-white focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
-                        >
-                          <option value="Conceitualização, Metodologia, Escrita – rascunho original">Conceitualização, Metodologia, Escrita – rascunho original</option>
-                          <option value="Curadoria de dados, Análise formal, Escrita – revisão e edição">Curadoria de dados, Análise formal, Escrita – revisão e edição</option>
-                          <option value="Investigação, Software, Validação">Investigação, Software, Validação</option>
-                          <option value="Supervisão, Obtenção de financiamento, Administração">Supervisão, Obtenção de financiamento, Administração</option>
-                          <option value="Recursos, Metodologia, Visualização">Recursos, Metodologia, Visualização</option>
-                        </select>
-                      </div>
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-700 mb-1">
+                        Papel CRediT do Autor
+                      </label>
+                      <select
+                        value={author.credit_roles}
+                        onChange={(e) => updateAuthorCredit(index, e.target.value)}
+                        className="w-full border border-slate-300 rounded-md p-2 text-xs bg-white focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
+                      >
+                        <option value="Conceitualização, Metodologia, Escrita – rascunho original">Conceitualização, Metodologia, Escrita – rascunho original</option>
+                        <option value="Curadoria de dados, Análise formal, Escrita – revisão e edição">Curadoria de dados, Análise formal, Escrita – revisão e edição</option>
+                        <option value="Investigação, Software, Validação">Investigação, Software, Validação</option>
+                        <option value="Supervisão, Obtenção de financiamento, Administração">Supervisão, Obtenção de financiamento, Administração</option>
+                        <option value="Recursos, Metodologia, Visualização">Recursos, Metodologia, Visualização</option>
+                      </select>
                     </div>
                   </div>
                 ))}

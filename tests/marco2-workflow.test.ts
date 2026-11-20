@@ -14,8 +14,11 @@ const {
   generateCrossrefXml,
   generateOaiPmhResponse,
   createConference,
+  updateConferenceEdition,
   updateUserRole,
   approveReviewerCandidate,
+  searchRegisteredUsers,
+  getRegisteredUsersByIds,
 } = await import("../src/lib/ocs-service.ts");
 
 seedDatabaseIfEmpty({ force: true });
@@ -206,5 +209,60 @@ describe("Entrega A/B — Schema v2 (ROR/OAuth), Aprovação de Avaliador e Trav
       () => updateUserRole(3, "author"),
       /último administrador ativo/i
     );
+  });
+
+  it("searchRegisteredUsers e getRegisteredUsersByIds retornam autores cadastrados na ordem correta", () => {
+    const found = searchRegisteredUsers("Lucas", []);
+    assert.equal(found.length > 0, true);
+    assert.equal(found.some((u) => u.id === 6), true);
+
+    const excluded = searchRegisteredUsers("Lucas", [6]);
+    assert.equal(excluded.some((u) => u.id === 6), false);
+
+    const ordered = getRegisteredUsersByIds([7, 6]);
+    assert.equal(ordered.length, 2);
+    assert.equal(ordered[0].id, 7);
+    assert.equal(ordered[1].id, 6);
+  });
+
+  it("updateConferenceEdition atualiza título, cidade, datas, ISBN e DOI atomicamente", () => {
+    const created = createConference({
+      title: "Evento Teste Original",
+      acronym: "ETO 2027",
+      slug: "eto2027",
+      city: "Curitiba, PR",
+      start_date: "2027-05-01",
+      end_date: "2027-05-03",
+      cfp_deadline: "2027-02-01",
+      review_deadline: "2027-03-01",
+      results_date: "2027-04-01",
+      isbn: "978-65-00000-00-1",
+      proceedings_doi: "10.5281/zenodo.111",
+      description: "Descrição inicial",
+    });
+
+    const { slug } = updateConferenceEdition({
+      conference_id: created.conferenceId,
+      sched_conf_id: created.schedConfId,
+      title: "Evento Teste Atualizado",
+      acronym: "ETA 2027",
+      city: "Belo Horizonte, MG",
+      location: "Campus Pampulha",
+      start_date: "2027-06-10",
+      end_date: "2027-06-12",
+      cfp_deadline: "2027-03-10",
+      review_deadline: "2027-04-10",
+      results_date: "2027-05-10",
+      isbn: "978-65-99999-99-9",
+      proceedings_doi: "10.5281/zenodo.999",
+      description: "Descrição atualizada",
+    });
+
+    assert.equal(slug, "eto2027");
+    const updatedSched = getActiveSchedConf(created.schedConfId);
+    assert.equal(updatedSched?.title, "Evento Teste Atualizado");
+    assert.equal(updatedSched?.city, "Belo Horizonte, MG");
+    assert.equal(updatedSched?.isbn, "978-65-99999-99-9");
+    assert.equal(updatedSched?.proceedings_doi, "10.5281/zenodo.999");
   });
 });

@@ -10,6 +10,7 @@ import {
   markPaperPresented,
   registerAttendee,
   createConference,
+  updateConferenceEdition,
   updateUserRole,
   approveReviewerCandidate,
   getSuggestedReviewersForPaper,
@@ -18,6 +19,9 @@ import {
   getPaperOwnerId,
   getReviewAssignmentOwner,
   getUserById,
+  searchRegisteredUsers,
+  getRegisteredUsersByIds,
+  type RegisteredAuthorSummary,
 } from "@/lib/ocs-service";
 import { testSmtpConnection } from "@/lib/email-service";
 import { ADMIN_ROLES, getSessionUser, requireActionAuth } from "@/lib/auth";
@@ -92,26 +96,53 @@ export async function submitPaperAction(formData: FormData) {
     return { success: false, error: "Preencha conferência, trilha, título e resumo obrigatórios." };
   }
 
-  const author_names = formData.getAll("author_name").map((v) => String(v || "").trim());
-  const author_emails = formData.getAll("author_email").map((v) => String(v || "").trim());
-  const author_affiliations = formData.getAll("author_affiliation").map((v) => String(v || "").trim());
-  const author_orcids = formData.getAll("author_orcid").map((v) => String(v || "").trim());
-  const author_rors = formData.getAll("author_ror").map((v) => String(v || "").trim());
+  const rawAuthorUserIds = formData.getAll("author_user_id").map((v) => parsePositiveInt(v));
   const author_credits = formData.getAll("author_credit").map((v) => String(v || "").trim());
 
-  const authors = author_names
-    .map((name, i) => ({
-      full_name: name,
-      email: author_emails[i] || "",
-      affiliation: author_affiliations[i] || "",
-      orcid: author_orcids[i] || "",
-      ror_id: author_rors[i] || "",
-      credit_roles: author_credits[i] || "",
-      is_primary: i === 0,
-    }))
-    .filter((a) => a.full_name.length > 0);
+  let authors: Array<{
+    full_name: string;
+    email: string;
+    affiliation: string;
+    orcid: string;
+    ror_id: string;
+    credit_roles: string;
+    is_primary: boolean;
+  }> = [];
 
-  if (authors.length === 0) {
+  if (rawAuthorUserIds.length > 0) {
+    if (rawAuthorUserIds.some((id) => !id)) {
+      return {
+        success: false,
+        error: "Todos os autores indicados precisam possuir cadastro ativo no sistema.",
+      };
+    }
+    const validIds = rawAuthorUserIds as number[];
+    const uniqueOrderedIds = Array.from(new Set(validIds));
+    const registeredAuthors = getRegisteredUsersByIds(uniqueOrderedIds);
+    if (registeredAuthors.length !== uniqueOrderedIds.length) {
+      return {
+        success: false,
+        error: "Um ou mais autores informados não possuem cadastro ativo no sistema. Peça que criem conta antes da submissão.",
+      };
+    }
+
+    const creditByUserId = new Map<number, string>();
+    validIds.forEach((uid, idx) => {
+      if (!creditByUserId.has(uid)) {
+        creditByUserId.set(uid, author_credits[idx] || "Conceitualização, Metodologia, Escrita – rascunho original");
+      }
+    });
+
+    authors = registeredAuthors.map((u, idx) => ({
+      full_name: u.full_name,
+      email: u.email,
+      affiliation: u.affiliation,
+      orcid: u.orcid,
+      ror_id: u.ror_id,
+      credit_roles: creditByUserId.get(u.id) || "Conceitualização, Metodologia, Escrita – rascunho original",
+      is_primary: idx === 0,
+    }));
+  } else {
     const fullUser = getUserById(auth.user.id);
     authors.push({
       full_name: fullUser?.full_name || auth.user.full_name,
@@ -119,7 +150,7 @@ export async function submitPaperAction(formData: FormData) {
       affiliation: fullUser?.affiliation || auth.user.affiliation || "",
       orcid: fullUser?.orcid || "",
       ror_id: fullUser?.ror_id || "",
-      credit_roles: "Conceitualização, Metodologia, Escrita – rascunho original",
+      credit_roles: author_credits[0] || "Conceitualização, Metodologia, Escrita – rascunho original",
       is_primary: true,
     });
   }
@@ -499,23 +530,95 @@ export async function updateUserReviewerProfileAction(formData: FormData) {
 }
 
 // 15. Retorna dados de identificação do usuário autenticado para pré-preencher autoria na submissão
-export async function getCurrentUserAuthorProfileAction(): Promise<{
-  full_name: string;
-  email: string;
-  affiliation: string;
-  orcid: string;
-  ror_id: string;
-} | null> {
+export async function getCurrentUserAuthorProfileAction(): Promise<RegisteredAuthorSummary | null> {
   const sessionUser = await getSessionUser();
   if (!sessionUser) return null;
   const fullUser = getUserById(sessionUser.id);
   return {
+    id: sessionUser.id,
     full_name: fullUser?.full_name || sessionUser.full_name || "",
     email: fullUser?.email || sessionUser.email || "",
     affiliation: fullUser?.affiliation || sessionUser.affiliation || "",
     orcid: fullUser?.orcid || "",
     ror_id: fullUser?.ror_id || "",
   };
+}
+
+// 16. Busca usuários cadastrados no sistema para vinculação de coautores na submissão
+export async function searchRegisteredUsersAction(
+  query: string,
+  excludeIds: number[] = []
+): Promise<{ success: boolean; users: RegisteredAuthorSummary[]; error?: string }> {
+  const auth = await requireActionAuth();
+  if (!auth.ok) return { success: false, users: [], error: auth.error };
+
+  const clean = parseOptionalString(query, 120);
+  if (clean.length < 2) {
+    return { success: true, users: [] };
+  }
+
+  const safeExclude = Array.isArray(excludeIds)
+    ? excludeIds.filter((id) => Number.isInteger(id) && id > 0)
+    : [];
+
+  const users = searchRegisteredUsers(clean, safeExclude);
+  return { success: true, users };
+}
+
+// 17. Coordenador edita informações de uma conferência/edição existente (restrito a ADMIN_ROLES)
+export async function updateConferenceAction(formData: FormData) {
+  const auth = await requireActionAuth(ADMIN_ROLES);
+  if (!auth.ok) return { success: false, error: auth.error };
+
+  const conference_id = parsePositiveInt(formData.get("conference_id"));
+  const sched_conf_id = parsePositiveInt(formData.get("sched_conf_id"));
+  const title = parseNonEmptyString(formData.get("title"), 250);
+  const acronym = parseNonEmptyString(formData.get("acronym"), 40);
+  const city = parseOptionalString(formData.get("city"), 120);
+  const location = parseOptionalString(formData.get("location"), 200) || city;
+  const start_date = parseOptionalString(formData.get("start_date"), 20);
+  const end_date = parseOptionalString(formData.get("end_date"), 20);
+  const cfp_deadline = parseOptionalString(formData.get("cfp_deadline"), 20);
+  const review_deadline = parseOptionalString(formData.get("review_deadline"), 20);
+  const results_date = parseOptionalString(formData.get("results_date"), 20);
+  const proceedings_doi = parseOptionalString(formData.get("proceedings_doi"), 120);
+  const isbn = parseOptionalString(formData.get("isbn"), 40);
+  const description = parseOptionalString(formData.get("description"), 5000);
+
+  if (!conference_id || !sched_conf_id || !title || !acronym) {
+    return { success: false, error: "Título, sigla e edição da conferência são obrigatórios." };
+  }
+
+  try {
+    const { slug } = updateConferenceEdition({
+      conference_id,
+      sched_conf_id,
+      title,
+      acronym,
+      city,
+      location,
+      start_date,
+      end_date,
+      cfp_deadline,
+      review_deadline,
+      results_date,
+      proceedings_doi,
+      isbn,
+      description,
+    });
+
+    revalidatePath("/");
+    revalidatePath("/proceedings");
+    revalidatePath("/schedule");
+    revalidatePath("/dashboard/director");
+    revalidatePath(`/conference/${slug}`);
+    return { success: true };
+  } catch (err: unknown) {
+    return {
+      success: false,
+      error: err instanceof Error ? err.message : "Não foi possível atualizar a conferência.",
+    };
+  }
 }
 
 // 14. Configuração SMTP é exclusivamente via variáveis de ambiente (nunca grava senha no banco)

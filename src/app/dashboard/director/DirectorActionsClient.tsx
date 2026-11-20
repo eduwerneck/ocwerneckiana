@@ -2,11 +2,12 @@
 
 import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Paper, User, EmailLog, ReviewerMatch } from "@/lib/ocs-service";
+import { Conference, Paper, User, EmailLog, ReviewerMatch } from "@/lib/ocs-service";
 import { 
   assignReviewerAction, 
   recordDecisionAction,
   createConferenceAction,
+  updateConferenceAction,
   updateUserRoleAction,
   approveReviewerCandidateAction,
   markPaperPresentedAction,
@@ -52,13 +53,15 @@ import {
   Zap,
   KeyRound,
   Shield,
-  Info
+  Info,
+  Pencil
 } from "lucide-react";
 
 interface Props {
   submissions: Paper[];
   reviewers: User[];
   allUsers?: User[];
+  conferences?: Conference[];
   emailLogs?: EmailLog[];
   smtpSettings?: {
     host: string;
@@ -73,12 +76,13 @@ export default function DirectorActionsClient({
   submissions, 
   reviewers, 
   allUsers = [], 
+  conferences = [],
   emailLogs = [],
   smtpSettings
 }: Props) {
   const router = useRouter();
   const assignRequestIdRef = useRef(0);
-  const [activeTab, setActiveTab] = useState<"submissions" | "users" | "interop" | "reports" | "emails">("submissions");
+  const [activeTab, setActiveTab] = useState<"submissions" | "events" | "users" | "interop" | "reports" | "emails">("submissions");
   const [selectedPaper, setSelectedPaper] = useState<Paper | null>(null);
   const [assignModalOpen, setAssignModalOpen] = useState(false);
   const [decisionModalOpen, setDecisionModalOpen] = useState(false);
@@ -128,6 +132,27 @@ export default function DirectorActionsClient({
   const [confDesc, setConfDesc] = useState("");
   const [confLoading, setConfLoading] = useState(false);
   const [confSuccessMsg, setConfSuccessMsg] = useState<string | null>(null);
+
+  // Estados de Edição de Evento/Conferência existente
+  const [editingEvent, setEditingEvent] = useState<{
+    conference_id: number;
+    sched_conf_id: number;
+    slug: string;
+    title: string;
+    acronym: string;
+    city: string;
+    location: string;
+    start_date: string;
+    end_date: string;
+    cfp_deadline: string;
+    review_deadline: string;
+    results_date: string;
+    proceedings_doi: string;
+    isbn: string;
+    description: string;
+  } | null>(null);
+  const [editEventLoading, setEditEventLoading] = useState(false);
+  const [editEventFeedback, setEditEventFeedback] = useState<{ type: "success" | "error"; message: string } | null>(null);
 
   // User roles states
   const [userRoles, setUserRoles] = useState<Record<number, string>>(
@@ -393,6 +418,69 @@ export default function DirectorActionsClient({
     }
   };
 
+  const handleOpenEditEvent = (conf: Conference) => {
+    const ed = conf.active_edition;
+    if (!ed) return;
+    setEditEventFeedback(null);
+    setEditingEvent({
+      conference_id: conf.id,
+      sched_conf_id: ed.id,
+      slug: conf.slug,
+      title: ed.title || conf.title,
+      acronym: ed.acronym || conf.acronym,
+      city: ed.city || "",
+      location: ed.location || ed.city || "",
+      start_date: ed.start_date || "",
+      end_date: ed.end_date || "",
+      cfp_deadline: ed.cfp_deadline || "",
+      review_deadline: ed.review_deadline || "",
+      results_date: ed.results_date || "",
+      proceedings_doi: ed.proceedings_doi || "",
+      isbn: ed.isbn || "",
+      description: ed.description || conf.description || "",
+    });
+  };
+
+  const handleUpdateConference = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingEvent) return;
+    setEditEventLoading(true);
+    setEditEventFeedback(null);
+
+    const formData = new FormData();
+    formData.append("conference_id", String(editingEvent.conference_id));
+    formData.append("sched_conf_id", String(editingEvent.sched_conf_id));
+    formData.append("title", editingEvent.title.trim());
+    formData.append("acronym", editingEvent.acronym.trim());
+    formData.append("city", editingEvent.city.trim());
+    formData.append("location", editingEvent.location.trim());
+    formData.append("start_date", editingEvent.start_date.trim());
+    formData.append("end_date", editingEvent.end_date.trim());
+    formData.append("cfp_deadline", editingEvent.cfp_deadline.trim());
+    formData.append("review_deadline", editingEvent.review_deadline.trim());
+    formData.append("results_date", editingEvent.results_date.trim());
+    formData.append("proceedings_doi", editingEvent.proceedings_doi.trim());
+    formData.append("isbn", editingEvent.isbn.trim());
+    formData.append("description", editingEvent.description.trim());
+
+    try {
+      const res = await updateConferenceAction(formData);
+      if (res.success) {
+        setEditEventFeedback({ type: "success", message: "Informações do evento atualizadas com sucesso!" });
+        setTimeout(() => {
+          setEditingEvent(null);
+          router.refresh();
+        }, 900);
+      } else {
+        setEditEventFeedback({ type: "error", message: res.error || "Erro ao atualizar evento." });
+      }
+    } catch {
+      setEditEventFeedback({ type: "error", message: "Erro de conexão ao atualizar evento." });
+    } finally {
+      setEditEventLoading(false);
+    }
+  };
+
   const handleRoleChange = async (userId: number, newRole: string) => {
     const previousRole = userRoles[userId];
     setRoleUpdatingId(userId);
@@ -498,6 +586,21 @@ export default function DirectorActionsClient({
           >
             <FileText className="w-3.5 h-3.5" />
             <span>Submissões ({submissions.length})</span>
+          </button>
+
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === "events"}
+            onClick={() => setActiveTab("events")}
+            className={`flex items-center space-x-1.5 px-3 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition cursor-pointer ${
+              activeTab === "events"
+                ? "bg-purple-600 text-white shadow-xs"
+                : "text-slate-700 hover:bg-slate-100"
+            }`}
+          >
+            <Calendar className="w-3.5 h-3.5" />
+            <span>Eventos ({conferences.length})</span>
           </button>
 
           <button
@@ -863,6 +966,275 @@ export default function DirectorActionsClient({
         </div>
         );
       })()}
+
+      {/* ======================================================== */}
+      {/* ABA 1B: GESTÃO E EDIÇÃO DE EVENTOS / CONFERÊNCIAS        */}
+      {/* ======================================================== */}
+      {activeTab === "events" && (
+        <div className="bg-white border border-slate-200 rounded-2xl shadow-xs overflow-hidden">
+          <div className="p-4 sm:p-5 border-b border-slate-100 bg-slate-50 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <h2 className="text-sm font-bold text-slate-900">Conferências e Edições Cadastradas</h2>
+              <p className="text-xs text-slate-500">
+                Edite informações oficiais do evento (datas, prazos, local, ISBN, DOI dos anais e descrição).
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setConfSuccessMsg(null);
+                setCreateConfModalOpen(true);
+              }}
+              className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-3.5 py-2 rounded-xl text-xs flex items-center space-x-1.5 transition cursor-pointer self-start sm:self-auto"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>Nova Conferência</span>
+            </button>
+          </div>
+
+          {conferences.length === 0 ? (
+            <div className="p-10 text-center text-xs text-slate-500">
+              Nenhuma conferência cadastrada ainda. Clique em <strong>Nova Conferência</strong> para iniciar.
+            </div>
+          ) : (
+            <div className="divide-y divide-slate-100">
+              {conferences.map((conf) => {
+                const ed = conf.active_edition;
+                return (
+                  <div key={conf.id} className="p-5 flex flex-col lg:flex-row lg:items-center justify-between gap-4 hover:bg-slate-50/50 transition">
+                    <div className="space-y-1.5 max-w-3xl">
+                      <div className="flex flex-wrap items-center gap-2 text-xs">
+                        <span className="bg-blue-100 text-blue-800 font-bold px-2 py-0.5 rounded uppercase text-[10px]">
+                          {ed?.acronym || conf.acronym}
+                        </span>
+                        <span className="font-mono text-[11px] text-slate-500">/{conf.slug}</span>
+                        {ed?.city && (
+                          <span className="text-slate-600 inline-flex items-center space-x-1">
+                            <MapPin className="w-3 h-3 text-red-500" />
+                            <span>{ed.city}</span>
+                          </span>
+                        )}
+                      </div>
+                      <h3 className="text-base font-bold text-slate-900">{ed?.title || conf.title}</h3>
+                      {ed && (
+                        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-slate-600">
+                          <span><strong>Evento:</strong> {ed.start_date} a {ed.end_date}</span>
+                          <span><strong>Submissão até:</strong> {ed.cfp_deadline}</span>
+                          <span><strong>Avaliação até:</strong> {ed.review_deadline}</span>
+                          {ed.isbn && <span className="font-mono"><strong>ISBN:</strong> {ed.isbn}</span>}
+                          {ed.proceedings_doi && <span className="font-mono"><strong>DOI:</strong> {ed.proceedings_doi}</span>}
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="flex items-center gap-2 shrink-0">
+                      <a
+                        href={`/conference/${conf.slug}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold px-3 py-2 rounded-lg text-xs inline-flex items-center space-x-1 transition"
+                      >
+                        <ExternalLink className="w-3.5 h-3.5" />
+                        <span>Ver Página</span>
+                      </a>
+                      {ed && (
+                        <button
+                          type="button"
+                          onClick={() => handleOpenEditEvent(conf)}
+                          className="bg-purple-600 hover:bg-purple-700 text-white font-bold px-3.5 py-2 rounded-lg text-xs inline-flex items-center space-x-1.5 transition cursor-pointer"
+                        >
+                          <Pencil className="w-3.5 h-3.5" />
+                          <span>Editar Evento</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Modal de Edição de Evento */}
+      {editingEvent && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs overflow-y-auto">
+          <form
+            onSubmit={handleUpdateConference}
+            className="bg-white rounded-3xl max-w-2xl w-full border border-slate-200 shadow-2xl p-6 sm:p-7 space-y-4 my-8"
+          >
+            <div className="flex items-start justify-between border-b border-slate-100 pb-3">
+              <div>
+                <span className="bg-purple-100 text-purple-800 text-[10px] font-bold px-2 py-0.5 rounded uppercase">
+                  Editar Conferência (/{editingEvent.slug})
+                </span>
+                <h3 className="text-lg font-extrabold text-slate-900 mt-1">
+                  Informações Oficiais do Evento
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEditingEvent(null)}
+                className="text-slate-400 hover:text-slate-600 p-1 rounded-lg cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {editEventFeedback && (
+              <div
+                className={`p-3 rounded-xl text-xs font-semibold ${
+                  editEventFeedback.type === "success"
+                    ? "bg-emerald-50 border border-emerald-200 text-emerald-800"
+                    : "bg-red-50 border border-red-200 text-red-800"
+                }`}
+              >
+                {editEventFeedback.message}
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+              <div className="sm:col-span-2">
+                <label className="block font-bold text-slate-700 mb-1">Título do Evento *</label>
+                <input
+                  type="text"
+                  required
+                  value={editingEvent.title}
+                  onChange={(e) => setEditingEvent({ ...editingEvent, title: e.target.value })}
+                  className="w-full border border-slate-300 rounded-lg p-2 focus:ring-2 focus:ring-purple-500 focus:outline-hidden"
+                />
+              </div>
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">Sigla *</label>
+                <input
+                  type="text"
+                  required
+                  value={editingEvent.acronym}
+                  onChange={(e) => setEditingEvent({ ...editingEvent, acronym: e.target.value })}
+                  className="w-full border border-slate-300 rounded-lg p-2 focus:ring-2 focus:ring-purple-500 focus:outline-hidden"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">Cidade Sede</label>
+                <input
+                  type="text"
+                  value={editingEvent.city}
+                  onChange={(e) => setEditingEvent({ ...editingEvent, city: e.target.value })}
+                  className="w-full border border-slate-300 rounded-lg p-2 focus:ring-2 focus:ring-purple-500 focus:outline-hidden"
+                />
+              </div>
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">Local / Campus</label>
+                <input
+                  type="text"
+                  value={editingEvent.location}
+                  onChange={(e) => setEditingEvent({ ...editingEvent, location: e.target.value })}
+                  className="w-full border border-slate-300 rounded-lg p-2 focus:ring-2 focus:ring-purple-500 focus:outline-hidden"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5 text-xs">
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">Início</label>
+                <input
+                  type="date"
+                  value={editingEvent.start_date}
+                  onChange={(e) => setEditingEvent({ ...editingEvent, start_date: e.target.value })}
+                  className="w-full border border-slate-300 rounded-lg p-2"
+                />
+              </div>
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">Término</label>
+                <input
+                  type="date"
+                  value={editingEvent.end_date}
+                  onChange={(e) => setEditingEvent({ ...editingEvent, end_date: e.target.value })}
+                  className="w-full border border-slate-300 rounded-lg p-2"
+                />
+              </div>
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">Prazo CFP</label>
+                <input
+                  type="date"
+                  value={editingEvent.cfp_deadline}
+                  onChange={(e) => setEditingEvent({ ...editingEvent, cfp_deadline: e.target.value })}
+                  className="w-full border border-slate-300 rounded-lg p-2"
+                />
+              </div>
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">Avaliação</label>
+                <input
+                  type="date"
+                  value={editingEvent.review_deadline}
+                  onChange={(e) => setEditingEvent({ ...editingEvent, review_deadline: e.target.value })}
+                  className="w-full border border-slate-300 rounded-lg p-2"
+                />
+              </div>
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">Resultados</label>
+                <input
+                  type="date"
+                  value={editingEvent.results_date}
+                  onChange={(e) => setEditingEvent({ ...editingEvent, results_date: e.target.value })}
+                  className="w-full border border-slate-300 rounded-lg p-2"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">ISBN dos Anais</label>
+                <input
+                  type="text"
+                  value={editingEvent.isbn}
+                  onChange={(e) => setEditingEvent({ ...editingEvent, isbn: e.target.value })}
+                  className="w-full border border-slate-300 rounded-lg p-2 font-mono"
+                />
+              </div>
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">DOI dos Anais</label>
+                <input
+                  type="text"
+                  value={editingEvent.proceedings_doi}
+                  onChange={(e) => setEditingEvent({ ...editingEvent, proceedings_doi: e.target.value })}
+                  className="w-full border border-slate-300 rounded-lg p-2 font-mono"
+                />
+              </div>
+            </div>
+
+            <div className="text-xs">
+              <label className="block font-bold text-slate-700 mb-1">Descrição / Apresentação</label>
+              <textarea
+                rows={3}
+                value={editingEvent.description}
+                onChange={(e) => setEditingEvent({ ...editingEvent, description: e.target.value })}
+                className="w-full border border-slate-300 rounded-lg p-2 focus:ring-2 focus:ring-purple-500 focus:outline-hidden"
+              />
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setEditingEvent(null)}
+                className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold px-4 py-2 rounded-xl text-xs cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button
+                type="submit"
+                disabled={editEventLoading}
+                className="bg-purple-600 hover:bg-purple-700 disabled:opacity-60 text-white font-bold px-5 py-2 rounded-xl text-xs cursor-pointer"
+              >
+                {editEventLoading ? "Salvando..." : "Salvar Alterações"}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
 
       {/* ======================================================== */}
       {/* ABA 2: ATRIBUIÇÃO DE FUNÇÕES AOS USUÁRIOS                */}

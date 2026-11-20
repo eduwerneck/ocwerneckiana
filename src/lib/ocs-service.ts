@@ -1976,4 +1976,157 @@ export function approveReviewerCandidate(userId: number, approve: boolean): bool
   return true;
 }
 
+export interface RegisteredAuthorSummary {
+  id: number;
+  full_name: string;
+  email: string;
+  affiliation: string;
+  orcid: string;
+  ror_id: string;
+}
+
+export function searchRegisteredUsers(query: string, excludeIds: number[] = []): RegisteredAuthorSummary[] {
+  const clean = query.trim();
+  if (clean.length < 2) return [];
+  const like = `%${clean.toLowerCase()}%`;
+  const rows = db
+    .prepare(`
+      SELECT id, full_name, email, affiliation, orcid, ror_id
+      FROM users
+      WHERE LOWER(full_name) LIKE ?
+         OR LOWER(email) LIKE ?
+         OR LOWER(COALESCE(orcid, '')) LIKE ?
+         OR LOWER(COALESCE(affiliation, '')) LIKE ?
+      ORDER BY full_name ASC
+      LIMIT 15
+    `)
+    .all(like, like, like, like) as unknown as Array<{
+      id: number;
+      full_name: string;
+      email: string;
+      affiliation: string | null;
+      orcid: string | null;
+      ror_id: string | null;
+    }>;
+
+  const excluded = new Set(excludeIds);
+  return toPlain(
+    rows
+      .filter((r) => !excluded.has(r.id))
+      .slice(0, 10)
+      .map((r) => ({
+        id: r.id,
+        full_name: r.full_name,
+        email: r.email,
+        affiliation: r.affiliation || "",
+        orcid: r.orcid || "",
+        ror_id: r.ror_id || "",
+      }))
+  );
+}
+
+export function getRegisteredUsersByIds(ids: number[]): RegisteredAuthorSummary[] {
+  const uniqueIds = Array.from(new Set(ids.filter((id) => Number.isInteger(id) && id > 0)));
+  if (uniqueIds.length === 0) return [];
+  const placeholders = uniqueIds.map(() => "?").join(", ");
+  const rows = db
+    .prepare(`
+      SELECT id, full_name, email, affiliation, orcid, ror_id
+      FROM users
+      WHERE id IN (${placeholders})
+    `)
+    .all(...uniqueIds) as unknown as Array<{
+      id: number;
+      full_name: string;
+      email: string;
+      affiliation: string | null;
+      orcid: string | null;
+      ror_id: string | null;
+    }>;
+
+  const byId = new Map<number, RegisteredAuthorSummary>();
+  for (const r of rows) {
+    byId.set(r.id, {
+      id: r.id,
+      full_name: r.full_name,
+      email: r.email,
+      affiliation: r.affiliation || "",
+      orcid: r.orcid || "",
+      ror_id: r.ror_id || "",
+    });
+  }
+
+  // Preserva a ordem original de autoria
+  const ordered: RegisteredAuthorSummary[] = [];
+  for (const id of uniqueIds) {
+    const found = byId.get(id);
+    if (found) ordered.push(found);
+  }
+  return toPlain(ordered);
+}
+
+export function updateConferenceEdition(data: {
+  conference_id: number;
+  sched_conf_id: number;
+  title: string;
+  acronym: string;
+  city: string;
+  location?: string;
+  start_date: string;
+  end_date: string;
+  cfp_deadline: string;
+  review_deadline: string;
+  results_date: string;
+  proceedings_doi?: string;
+  isbn?: string;
+  description: string;
+}): { slug: string } {
+  return runInTransaction(() => {
+    const conf = db
+      .prepare("SELECT id, slug FROM conferences WHERE id = ?")
+      .get(data.conference_id) as { id: number; slug: string } | undefined;
+    if (!conf) {
+      throw new Error("Conferência não encontrada.");
+    }
+
+    const sched = db
+      .prepare("SELECT id FROM sched_confs WHERE id = ? AND conference_id = ?")
+      .get(data.sched_conf_id, data.conference_id) as { id: number } | undefined;
+    if (!sched) {
+      throw new Error("Edição da conferência não encontrada.");
+    }
+
+    db.prepare(`
+      UPDATE conferences
+      SET title = ?, acronym = ?, description = ?
+      WHERE id = ?
+    `).run(data.title, data.acronym, data.description, data.conference_id);
+
+    db.prepare(`
+      UPDATE sched_confs
+      SET title = ?, acronym = ?, city = ?, location = ?,
+          start_date = ?, end_date = ?, cfp_deadline = ?,
+          review_deadline = ?, results_date = ?,
+          proceedings_doi = ?, isbn = ?, description = ?
+      WHERE id = ?
+    `).run(
+      data.title,
+      data.acronym,
+      data.city,
+      data.location || data.city,
+      data.start_date,
+      data.end_date,
+      data.cfp_deadline,
+      data.review_deadline,
+      data.results_date,
+      data.proceedings_doi || "",
+      data.isbn || "",
+      data.description,
+      data.sched_conf_id
+    );
+
+    return { slug: conf.slug };
+  });
+}
+
 

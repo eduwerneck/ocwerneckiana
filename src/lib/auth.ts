@@ -78,7 +78,7 @@ export async function requirePageAuth(
     redirect(`/login?next=${encodeURIComponent(currentPath)}`);
   }
   if (allowedRoles && allowedRoles.length > 0 && !allowedRoles.includes(user.role)) {
-    redirect("/dashboard/user");
+    redirect("/unauthorized");
   }
   return user;
 }

@@ -20,8 +20,7 @@ import {
 import { useLanguage, Locale } from "@/lib/i18n";
 import type { SessionUser } from "@/lib/auth-core";
 import { logoutAction } from "@/app/auth-actions";
-
-const ADMIN_ROLE_SET = new Set(["admin", "manager", "director"]);
+import { formatRoleLabel, getRoleBadgeClasses, isAdminRole } from "@/lib/role-labels";
 
 interface Props {
   sessionUser?: SessionUser | null;
@@ -45,7 +44,10 @@ export default function Navbar({ sessionUser = null }: Props) {
     { code: "es", label: "ES" },
   ];
 
-  const isAdmin = Boolean(sessionUser && ADMIN_ROLE_SET.has(sessionUser.role));
+  const isAdmin = Boolean(sessionUser && isAdminRole(sessionUser.role));
+  const inAdminArea = pathname.startsWith("/dashboard/director");
+  const roleLabel = sessionUser ? formatRoleLabel(sessionUser.role) : "";
+  const roleBadgeClass = sessionUser ? getRoleBadgeClasses(sessionUser.role) : "";
 
   return (
     <header className="border-b border-slate-200 bg-white sticky top-0 z-50 shadow-xs">
@@ -120,22 +122,28 @@ export default function Navbar({ sessionUser = null }: Props) {
               </Link>
             ) : (
               <details className="relative ml-1 group">
-                <summary className="list-none flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-bold text-slate-800 bg-slate-100 hover:bg-slate-200 border border-slate-200 cursor-pointer transition select-none">
+                <summary className="list-none flex items-center space-x-2 px-3 py-1.5 rounded-lg text-xs font-bold text-slate-800 bg-slate-100 hover:bg-slate-200 border border-slate-200 cursor-pointer transition select-none">
                   <UserCheck className="w-3.5 h-3.5 text-blue-700 shrink-0" />
-                  <span className="max-w-[140px] truncate">{sessionUser.full_name}</span>
+                  <span className="max-w-[120px] truncate">{sessionUser.full_name}</span>
+                  <span className={`hidden xl:inline-block text-[10px] font-bold px-2 py-0.5 rounded-full border ${roleBadgeClass}`}>
+                    {inAdminArea ? "Modo Admin" : roleLabel}
+                  </span>
                   <ChevronDown className="w-3.5 h-3.5 text-slate-500 shrink-0" />
                 </summary>
-                <div className="absolute right-0 mt-2 w-56 bg-white border border-slate-200 rounded-xl shadow-lg py-1.5 z-50">
-                  <div className="px-3 py-2 border-b border-slate-100">
+                <div className="absolute right-0 mt-2 w-60 bg-white border border-slate-200 rounded-xl shadow-lg py-1.5 z-50">
+                  <div className="px-3 py-2 border-b border-slate-100 space-y-1">
                     <p className="text-xs font-bold text-slate-900 truncate">{sessionUser.full_name}</p>
                     <p className="text-[11px] text-slate-500 truncate">{sessionUser.email}</p>
+                    <span className={`inline-block text-[10px] font-bold px-2 py-0.5 rounded-full border ${roleBadgeClass}`}>
+                      {roleLabel}
+                    </span>
                   </div>
                   <Link
-                    href="/dashboard/user"
+                    href="/dashboard/user?tab=author"
                     className="flex items-center space-x-2 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
                   >
                     <UserCheck className="w-3.5 h-3.5 text-blue-600" />
-                    <span>Meu Painel (Autor/Avaliador)</span>
+                    <span>{isAdmin ? "Alternar: Modo Autor / Avaliador" : "Meu Painel (Autor / Avaliador)"}</span>
                   </Link>
                   {isAdmin && (
                     <Link
@@ -143,7 +151,7 @@ export default function Navbar({ sessionUser = null }: Props) {
                       className="flex items-center space-x-2 px-3 py-2 text-xs font-semibold text-purple-700 hover:bg-purple-50"
                     >
                       <ShieldCheck className="w-3.5 h-3.5 text-purple-600" />
-                      <span>Painel do Administrador</span>
+                      <span>Modo Administrador (Editor)</span>
                     </Link>
                   )}
                   <div className="border-t border-slate-100 mt-1 pt-1">

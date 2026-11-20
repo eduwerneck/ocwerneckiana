@@ -1,7 +1,8 @@
 import Link from "next/link";
 import { getAllSubmissionsForDirector, getAllUsers, getEmailLogs, getPublicSmtpSettings } from "@/lib/ocs-service";
 import { ADMIN_ROLES, requirePageAuth } from "@/lib/auth";
-import { BookOpen, ChevronRight } from "lucide-react";
+import { formatRoleLabel } from "@/lib/role-labels";
+import { BookOpen, ChevronRight, UserCheck } from "lucide-react";
 import DirectorActionsClient from "./DirectorActionsClient";
 
 export const dynamic = "force-dynamic";
@@ -35,7 +36,7 @@ export default async function DirectorDashboardPage() {
         <div>
           <div className="flex items-center space-x-2">
             <span className="bg-purple-100 text-purple-800 text-[10px] font-bold px-2 py-0.5 rounded uppercase">
-              Papel: {sessionUser.role}
+              {formatRoleLabel(sessionUser.role)}
             </span>
             <span className="text-xs text-slate-500">
               • {sessionUser.full_name}{sessionUser.affiliation ? ` (${sessionUser.affiliation})` : ""}
@@ -49,10 +50,17 @@ export default async function DirectorDashboardPage() {
           </p>
         </div>
 
-        <div className="flex items-center space-x-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <Link
+            href="/dashboard/user?tab=author"
+            className="bg-blue-50 hover:bg-blue-100 text-blue-800 border border-blue-200 font-semibold px-3.5 py-2 rounded-lg text-xs transition flex items-center space-x-1.5"
+          >
+            <UserCheck className="w-3.5 h-3.5" />
+            <span>Modo Autor / Avaliador</span>
+          </Link>
           <Link
             href="/proceedings"
-            className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold px-4 py-2 rounded-lg text-xs transition flex items-center space-x-1.5"
+            className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold px-3.5 py-2 rounded-lg text-xs transition flex items-center space-x-1.5"
           >
             <BookOpen className="w-3.5 h-3.5" />
             <span>Ver Anais Publicados</span>

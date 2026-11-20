@@ -2,9 +2,11 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { Paper, ReviewAssignment, User } from "@/lib/ocs-service";
 import { AcademicCertificate } from "@/lib/email-service";
 import { updateUserReviewerProfileAction } from "@/app/actions";
+import { formatDatePtBr } from "@/lib/date";
 import AuthorSubmissionsClient from "../author/AuthorSubmissionsClient";
 import ReviewerFormClient from "../reviewer/ReviewerFormClient";
 import { 
@@ -34,6 +36,9 @@ interface Props {
   authorPapers: Paper[];
   reviewerAssignments: ReviewAssignment[];
   certificates: AcademicCertificate[];
+  initialTab?: "author" | "reviewer" | "certificates";
+  activeConfSlug?: string;
+  isAdmin?: boolean;
 }
 
 export default function UnifiedUserDashboardClient({
@@ -41,10 +46,15 @@ export default function UnifiedUserDashboardClient({
   authorPapers,
   reviewerAssignments,
   certificates,
+  initialTab = "author",
+  activeConfSlug = "citeca",
+  isAdmin = false,
 }: Props) {
-  const [activeTab, setActiveTab] = useState<"author" | "reviewer" | "certificates">("author");
+  const router = useRouter();
+  const [activeTab, setActiveTab] = useState<"author" | "reviewer" | "certificates">(initialTab);
   const [profileModalOpen, setProfileModalOpen] = useState(false);
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
+  const [profileError, setProfileError] = useState<string | null>(null);
 
   // Estados do formulário de perfil de avaliador
   const [isReviewerCandidate, setIsReviewerCandidate] = useState(user?.is_reviewer_candidate === 1);
@@ -58,20 +68,28 @@ export default function UnifiedUserDashboardClient({
 
   const pendingReviewsCount = reviewerAssignments.filter((a) => a.status === "pending").length;
   const completedReviewsCount = reviewerAssignments.filter((a) => a.status === "completed").length;
+  const hasReviewerRole = Boolean(
+    user?.role === "reviewer" || user?.is_reviewer_candidate === 1 || reviewerAssignments.length > 0
+  );
+  const submitHref = `/conference/${activeConfSlug}/submit`;
 
-  const handleCopyHash = (code: string) => {
-    navigator.clipboard.writeText(code);
-    setCopiedCode(code);
-    setTimeout(() => setCopiedCode(null), 2000);
+  const handleCopyHash = async (code: string) => {
+    try {
+      await navigator.clipboard.writeText(code);
+      setCopiedCode(code);
+      setTimeout(() => setCopiedCode(null), 2000);
+    } catch {
+      // Clipboard indisponível em contexto não-HTTPS
+    }
   };
 
   const handleSaveReviewerProfile = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!user) return;
     setSavingProfile(true);
+    setProfileError(null);
 
     const formData = new FormData();
-    formData.append("user_id", user.id.toString());
     formData.append("is_reviewer_candidate", isReviewerCandidate ? "true" : "false");
     formData.append("review_interests", reviewInterests);
     formData.append("preferred_track_ids", preferredTracks.join(","));
@@ -79,12 +97,15 @@ export default function UnifiedUserDashboardClient({
     formData.append("orcid", orcid);
 
     try {
-      await updateUserReviewerProfileAction(formData);
-      setProfileModalOpen(false);
-      window.location.reload();
-    } catch (err) {
-      console.error(err);
-      alert("Erro ao salvar perfil.");
+      const res = await updateUserReviewerProfileAction(formData);
+      if (res.success) {
+        setProfileModalOpen(false);
+        router.refresh();
+      } else {
+        setProfileError(res.error || "Erro ao salvar perfil.");
+      }
+    } catch {
+      setProfileError("Erro de conexão ao salvar perfil.");
     } finally {
       setSavingProfile(false);
     }
@@ -117,34 +138,50 @@ export default function UnifiedUserDashboardClient({
               </span>
               <span className="text-slate-300">•</span>
               <div className="flex items-center space-x-1.5">
-                <span className="text-xs text-slate-500">Papéis Atribuídos:</span>
+                <span className="text-xs text-slate-500">Papéis ativos:</span>
                 <span className="bg-emerald-100 text-emerald-800 text-[10px] font-bold px-2 py-0.5 rounded font-mono">
                   Autor
                 </span>
-                <span className="bg-purple-100 text-purple-800 text-[10px] font-bold px-2 py-0.5 rounded font-mono">
-                  Parecerista Ad-hoc
-                </span>
+                {hasReviewerRole && (
+                  <span className="bg-purple-100 text-purple-800 text-[10px] font-bold px-2 py-0.5 rounded font-mono">
+                    Avaliador
+                  </span>
+                )}
+                {isAdmin && (
+                  <Link
+                    href="/dashboard/director"
+                    className="bg-purple-600 hover:bg-purple-700 text-white text-[10px] font-bold px-2 py-0.5 rounded font-mono transition"
+                  >
+                    Ir para Modo Admin →
+                  </Link>
+                )}
               </div>
             </div>
 
             <h1 className="text-2xl font-black text-slate-900 tracking-tight">
-              {user?.full_name || "Dr. Lucas Martins de Oliveira"}
+              {user?.full_name || "Usuário Autenticado"}
             </h1>
             <p className="text-xs text-slate-600 flex flex-wrap items-center gap-x-3 gap-y-1">
-              <span className="flex items-center space-x-1">
-                <Building2 className="w-3.5 h-3.5 text-slate-400" />
-                <span>{user?.affiliation || "Universidade Estadual Paulista (UNESP)"}</span>
-              </span>
-              <span>•</span>
-              <a
-                href={user?.orcid ? `https://orcid.org/${user.orcid}` : "https://orcid.org/0000-0002-1825-0097"}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center space-x-1 text-[11px] text-emerald-700 font-mono font-semibold hover:underline"
-              >
-                <span className="w-3 h-3 rounded-full bg-emerald-600 text-white flex items-center justify-center text-[9px] font-bold">iD</span>
-                <span>{user?.orcid || "0000-0002-1825-0097"}</span>
-              </a>
+              {user?.affiliation && (
+                <span className="flex items-center space-x-1">
+                  <Building2 className="w-3.5 h-3.5 text-slate-400" />
+                  <span>{user.affiliation}</span>
+                </span>
+              )}
+              {user?.orcid && (
+                <>
+                  <span>•</span>
+                  <a
+                    href={`https://orcid.org/${user.orcid}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center space-x-1 text-[11px] text-emerald-700 font-mono font-semibold hover:underline"
+                  >
+                    <span className="w-3 h-3 rounded-full bg-emerald-600 text-white flex items-center justify-center text-[9px] font-bold">iD</span>
+                    <span>{user.orcid}</span>
+                  </a>
+                </>
+              )}
             </p>
 
             {/* Interesses de Avaliação e Matching */}
@@ -177,7 +214,7 @@ export default function UnifiedUserDashboardClient({
             </button>
 
             <Link
-              href="/conference/citeca/submit"
+              href={submitHref}
               className="bg-blue-600 hover:bg-blue-700 text-white font-bold px-4 py-2.5 rounded-xl text-xs shadow-xs transition flex items-center space-x-2 cursor-pointer"
             >
               <Send className="w-4 h-4" />
@@ -211,18 +248,20 @@ export default function UnifiedUserDashboardClient({
       </div>
 
       {/* Navegador de Abas: Autor vs Avaliador vs Certificados */}
-      <div className="flex items-center space-x-2 border-b border-slate-200">
+      <div role="tablist" aria-label="Modos do painel acadêmico" className="flex items-center space-x-2 border-b border-slate-200 overflow-x-auto">
         <button
           type="button"
+          role="tab"
+          aria-selected={activeTab === "author"}
           onClick={() => setActiveTab("author")}
-          className={`flex items-center space-x-2 px-5 py-3 border-b-2 text-xs font-bold transition cursor-pointer ${
+          className={`flex items-center space-x-2 px-4 py-3 border-b-2 text-xs font-bold whitespace-nowrap transition cursor-pointer ${
             activeTab === "author"
               ? "border-blue-600 text-blue-700 bg-white"
               : "border-transparent text-slate-500 hover:text-slate-800 hover:border-slate-300"
           }`}
         >
           <FileText className="w-4 h-4" />
-          <span>Meus Trabalhos como Autor</span>
+          <span>Minhas Submissões (Autor)</span>
           <span className="bg-blue-100 text-blue-800 text-[10px] px-2 py-0.5 rounded-full font-mono">
             {authorPapers.length}
           </span>
@@ -230,15 +269,17 @@ export default function UnifiedUserDashboardClient({
 
         <button
           type="button"
+          role="tab"
+          aria-selected={activeTab === "reviewer"}
           onClick={() => setActiveTab("reviewer")}
-          className={`flex items-center space-x-2 px-5 py-3 border-b-2 text-xs font-bold transition cursor-pointer ${
+          className={`flex items-center space-x-2 px-4 py-3 border-b-2 text-xs font-bold whitespace-nowrap transition cursor-pointer ${
             activeTab === "reviewer"
               ? "border-purple-600 text-purple-700 bg-white"
               : "border-transparent text-slate-500 hover:text-slate-800 hover:border-slate-300"
           }`}
         >
           <UserCheck className="w-4 h-4" />
-          <span>Tarefas de Avaliação (Parecerista Designado)</span>
+          <span>Minhas Avaliações (Parecerista)</span>
           <span className="bg-purple-100 text-purple-800 text-[10px] px-2 py-0.5 rounded-full font-mono">
             {reviewerAssignments.length}
           </span>
@@ -246,15 +287,17 @@ export default function UnifiedUserDashboardClient({
 
         <button
           type="button"
+          role="tab"
+          aria-selected={activeTab === "certificates"}
           onClick={() => setActiveTab("certificates")}
-          className={`flex items-center space-x-2 px-5 py-3 border-b-2 text-xs font-bold transition cursor-pointer ${
+          className={`flex items-center space-x-2 px-4 py-3 border-b-2 text-xs font-bold whitespace-nowrap transition cursor-pointer ${
             activeTab === "certificates"
               ? "border-emerald-600 text-emerald-700 bg-white"
               : "border-transparent text-slate-500 hover:text-slate-800 hover:border-slate-300"
           }`}
         >
           <Award className="w-4 h-4" />
-          <span>Minhas Declarações & Certificados</span>
+          <span>Declarações &amp; Certificados</span>
           <span className="bg-emerald-100 text-emerald-800 text-[10px] px-2 py-0.5 rounded-full font-mono">
             {certificates.length}
           </span>
@@ -266,13 +309,30 @@ export default function UnifiedUserDashboardClient({
         <div className="space-y-4">
           <div className="flex items-center justify-between text-xs text-slate-600 bg-slate-100/70 px-4 py-2.5 rounded-xl border border-slate-200">
             <span>
-              Exibindo artigos submetidos pelo seu usuário. Acompanhe avaliações, prazos e cartas de resposta da Rodada 2.
+              Exibindo artigos submetidos pelo seu usuário. Acompanhe avaliações, decisões editoriais e rodadas de revisão.
             </span>
-            <Link href="/conference/citeca/submit" className="text-blue-700 font-bold hover:underline">
+            <Link href={submitHref} className="text-blue-700 font-bold hover:underline shrink-0 ml-2">
               + Nova Submissão
             </Link>
           </div>
-          <AuthorSubmissionsClient papers={authorPapers} />
+          {authorPapers.length === 0 ? (
+            <div className="bg-white border border-slate-200 rounded-2xl p-10 text-center space-y-3">
+              <FileText className="w-10 h-10 text-slate-300 mx-auto" />
+              <h3 className="text-sm font-bold text-slate-800">Você ainda não submeteu nenhum artigo</h3>
+              <p className="text-xs text-slate-500 max-w-md mx-auto">
+                Envie seu manuscrito estruturado para iniciar a avaliação por pares duplo-cega.
+              </p>
+              <Link
+                href={submitHref}
+                className="inline-flex items-center space-x-1.5 bg-blue-600 hover:bg-blue-700 text-white font-bold px-4 py-2 rounded-xl text-xs transition"
+              >
+                <Send className="w-3.5 h-3.5" />
+                <span>Criar Primeira Submissão</span>
+              </Link>
+            </div>
+          ) : (
+            <AuthorSubmissionsClient papers={authorPapers} />
+          )}
         </div>
       )}
 
@@ -281,13 +341,33 @@ export default function UnifiedUserDashboardClient({
         <div className="space-y-4">
           <div className="flex items-center justify-between text-xs text-purple-900 bg-purple-50/70 px-4 py-2.5 rounded-xl border border-purple-200">
             <span>
-              Manuscritos atribuídos a você pela Comissão Editorial para emissão de parecer cego (*double-blind review*).
+              Manuscritos atribuídos a você pela Comissão Editorial para emissão de parecer duplo-cego (<em>double-blind review</em>).
             </span>
-            <span className="font-semibold text-purple-800">
+            <span className="font-semibold text-purple-800 shrink-0 ml-2">
               {pendingReviewsCount} tarefa(s) pendente(s)
             </span>
           </div>
-          <ReviewerFormClient assignments={reviewerAssignments} />
+          {reviewerAssignments.length === 0 ? (
+            <div className="bg-white border border-slate-200 rounded-2xl p-10 text-center space-y-3">
+              <UserCheck className="w-10 h-10 text-slate-300 mx-auto" />
+              <h3 className="text-sm font-bold text-slate-800">Nenhuma avaliação atribuída no momento</h3>
+              <p className="text-xs text-slate-500 max-w-md mx-auto">
+                {hasReviewerRole
+                  ? "Seu perfil de parecerista está ativo. Assim que a coordenação editorial designar um manuscrito na sua área, ele aparecerá aqui."
+                  : "Ative seu perfil de parecerista ad-hoc e informe suas áreas de interesse para receber convites de avaliação."}
+              </p>
+              <button
+                type="button"
+                onClick={() => setProfileModalOpen(true)}
+                className="inline-flex items-center space-x-1.5 bg-purple-600 hover:bg-purple-700 text-white font-bold px-4 py-2 rounded-xl text-xs transition cursor-pointer"
+              >
+                <Settings className="w-3.5 h-3.5" />
+                <span>{hasReviewerRole ? "Atualizar Áreas de Parecer" : "Ativar Perfil de Parecerista"}</span>
+              </button>
+            </div>
+          ) : (
+            <ReviewerFormClient assignments={reviewerAssignments} />
+          )}
         </div>
       )}
 
@@ -335,7 +415,7 @@ export default function UnifiedUserDashboardClient({
                           {isPres ? "Apresentação de Trabalho" : "Parecerista Ad-hoc"}
                         </span>
                         <span className="text-[10px] text-slate-400">
-                          {new Date(cert.issued_at).toLocaleDateString("pt-BR")}
+                          {formatDatePtBr(cert.issued_at)}
                         </span>
                       </div>
 
